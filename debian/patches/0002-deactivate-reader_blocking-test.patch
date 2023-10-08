@@ -1,0 +1,24 @@
+From: =?utf-8?q?C=C3=A9dric_Boutillier?= <boutil@debian.org>
+Date: Mon, 14 Nov 2016 11:58:02 -0200
+Subject: deactivate reader_blocking test
+
+It makes the test suite hang on Debian kFreeBSD ports
+
+https://github.com/sparklemotion/nokogiri/issues/965
+---
+ test/xml/test_reader.rb | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/test/xml/test_reader.rb b/test/xml/test_reader.rb
+index 4b5b5c5..f1ba469 100644
+--- a/test/xml/test_reader.rb
++++ b/test/xml/test_reader.rb
+@@ -52,7 +52,7 @@ module Nokogiri
+ 
+       # Issue #831
+       # Make sure that the reader doesn't block reading the entire input
+-      def test_reader_blocking
++      def _test_reader_blocking
+         rd, wr = IO.pipe
+         node_out = nil
+         t = Thread.start do

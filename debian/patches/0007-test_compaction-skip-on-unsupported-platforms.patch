@@ -1,0 +1,24 @@
+From: Antonio Terceiro <terceiro@debian.org>
+Date: Sun, 18 Dec 2022 09:10:57 -0300
+Subject: test_compaction: skip on unsupported platforms
+
+---
+ test/test_compaction.rb | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/test/test_compaction.rb b/test/test_compaction.rb
+index 3b4b8d8..cfb5259 100644
+--- a/test/test_compaction.rb
++++ b/test/test_compaction.rb
+@@ -3,6 +3,11 @@
+ require "helper"
+ 
+ describe "compaction" do
++  before(:all) do
++    GC.compact
++  rescue NotImplementedError
++    skip
++  end
+   describe Nokogiri::XML::Node do
+     it "compacts safely" do # https://github.com/sparklemotion/nokogiri/pull/2579
+       skip unless GC.respond_to?(:verify_compaction_references)

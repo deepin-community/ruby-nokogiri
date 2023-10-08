@@ -1,0 +1,6 @@
+0002-deactivate-reader_blocking-test.patch
+0002-Ignore-mismatching-versions-of-libs.patch
+0005-Remove-unnecessary-development-dependencies.patch
+0005-test-helper.rb-ignore-GC-compaction-on-unsupported-p.patch
+0006-Drop-code-from-rakelib-rubocop.rake.patch
+0007-test_compaction-skip-on-unsupported-platforms.patch

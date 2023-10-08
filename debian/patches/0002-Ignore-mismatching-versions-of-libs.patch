@@ -1,0 +1,44 @@
+From: =?utf-8?q?C=C3=A9dric_Boutillier?= <boutil@debian.org>
+Date: Sun, 19 Sep 2021 16:19:08 +0200
+Subject: Ignore mismatching versions of libs
+
+when there is a discrepancy between the version used to build the
+package and the version to used to run tests. Meaningful only during
+transitions, but cause spurious autopkgtest failures.
+
+Debian-Bug: https://bugs.debian.org/993818
+Forwarded: not-needed
+---
+ lib/nokogiri/version/info.rb | 19 ++++++++++---------
+ 1 file changed, 10 insertions(+), 9 deletions(-)
+
+diff --git a/lib/nokogiri/version/info.rb b/lib/nokogiri/version/info.rb
+index a5f4528..be48d09 100644
+--- a/lib/nokogiri/version/info.rb
++++ b/lib/nokogiri/version/info.rb
+@@ -72,15 +72,16 @@ module Nokogiri
+     def warnings
+       warnings = []
+ 
+-      if libxml2?
+-        if compiled_libxml_version != loaded_libxml_version
+-          warnings << "Nokogiri was built against libxml version #{compiled_libxml_version}, but has dynamically loaded #{loaded_libxml_version}"
+-        end
+-
+-        if compiled_libxslt_version != loaded_libxslt_version
+-          warnings << "Nokogiri was built against libxslt version #{compiled_libxslt_version}, but has dynamically loaded #{loaded_libxslt_version}"
+-        end
+-      end
++      # Debian: ignore warnings from mismatching build/load versions
++      # if libxml2?
++      #   if compiled_libxml_version != loaded_libxml_version
++      #     warnings << "Nokogiri was built against libxml version #{compiled_libxml_version}, but has dynamically loaded #{loaded_libxml_version}"
++      #   end
++      #
++      #   if compiled_libxslt_version != loaded_libxslt_version
++      #     warnings << "Nokogiri was built against libxslt version #{compiled_libxslt_version}, but has dynamically loaded #{loaded_libxslt_version}"
++      #   end
++      # end
+ 
+       warnings
+     end

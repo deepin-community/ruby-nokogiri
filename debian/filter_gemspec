@@ -1,0 +1,9 @@
+#!/usr/bin/ruby
+
+spec = Gem::Specification.load('debian/gemspec')
+spec.files.delete_if { |s| s =~ /^(ports|patches)/ }
+#spec.runtime_dependencies.delete_if { |s| s.name =~ /mini_portile2/ }
+#spec.dependencies.delete_if { |s| s.name =~ /mini_portile2/ }
+File.open('debian/gemspec', 'w') do |f|
+  f << spec.to_ruby
+end

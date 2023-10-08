@@ -1,0 +1,18 @@
+The ruby-nokogiri package uses the Github repository to fetch the test
+suite. Upstream does not want to provide a gemspec file in the
+repository for reasons explained in Y_U_NO_GEMSPEC.md. As it is crucial
+for integration between rubygems and Debian package management system,
+we decide to retrieve the gemspec file from the corresponding .gem as
+follows:
+- import the new tarball and open a changelog entry for this new version
+  (This can be done with the "new-upstream" script from the meta repo
+- run ./debian/rules gemspec this creates a debian/gemspec file which
+  can be committed in the repo.
+
+-- Cédric Boutillier <boutil@debian.org>  Wed, 09 Jan 2019 10:15:39 +0100
+
+
+It seems that the project has been shipping a gemspec since the 1.13.x series.
+So the incantation above is obsolete.
+
+-- Cédric Boutillier <boutil@debian.org>  Mon, 18 Jul 2022 23:18:54 +0200
