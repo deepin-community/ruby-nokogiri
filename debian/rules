@@ -1,4 +1,48 @@
 #!/usr/bin/make -f
 
+include /usr/share/dpkg/pkg-info.mk
+
+export GEM2DEB_TEST_RUNNER = --check-dependencies
+export NOKOGIRI_USE_SYSTEM_LIBRARIES = true
+export DH_RUBY = --gem-install
+export DH_RUBY_GEM_INSTALL_INCLUDE = ext/nokogiri/*.h
+export DH_RUBY_GEM_INSTALL_EXCLUDE = ext/java/*
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+GEM_VERSION=$(word 1, $(subst +, ,$(DEB_VERSION_UPSTREAM)))
+
 %:
-	dh $@
+	dh $@ --buildsystem=ruby --with ruby
+
+# obsolete since 1.13.x, as the project ships now a gemspec.
+gemspec:
+	gem fetch -v $(GEM_VERSION) --platform ruby nokogiri
+	gem specification nokogiri-$(GEM_VERSION).gem --ruby > debian/gemspec
+	debian/filter_gemspec
+	rm -rf nokogiri-$(GEM_VERSION).gem
+
+#execute_before_dh_auto_build:
+#	GEMSPEC_VERSION=$$(grep "s\.version = " debian/gemspec |awk '{ print $$3 }'); \
+#	if ! [ "$$GEMSPEC_VERSION" = "\"$(GEM_VERSION)\"" ]; then \
+#        	echo "Debian version is $(GEM_VERSION) but 'debian/gemspec' is only $$GEMSPEC_VERSION"; \
+#        	echo "Run 'debian/rules gemspec' to update gemspec file"; \
+#		exit 1; \
+#	fi
+
+execute_before_dh_installman:
+	mkdir man
+	pod2man --center "" --release "" --name NOKOGIRI --utf8 debian/nokogiri.1.pod man/nokogiri.1
+
+execute_before_dh_auto_clean:
+	rm -rf man/
+
+override_dh_installchangelogs:
+	dh_installchangelogs CHANGELOG.md
+
+execute_before_dh_auto_install:
+	for r in $$(ruby -rruby_debian_dev -e 'puts RubyDebianDev::SUPPORTED_RUBY_VERSIONS.values'); do \
+		dh_install ext/nokogiri/nokogiri.h $$($$r -e 'puts RbConfig::CONFIG["vendorhdrdir"]'); \
+	done
+
+execute_after_dh_auto_install:
+	rm -rf debian/ruby-nokogiri/usr/lib/*/rubygems-integration/*/gems/nokogiri-*/gumbo-parser/

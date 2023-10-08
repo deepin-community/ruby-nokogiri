@@ -1,15 +1,41 @@
-Source: template-repository
-Section: unknown
+Source: ruby-nokogiri
+Section: ruby
 Priority: optional
-Maintainer: Tsic404 <liuheng@deepin.org>
-Build-Depends: debhelper (>= 11)
-Standards-Version: 4.1.3
-Homepage: https://github.com/deepin-community/template-repository
-#Vcs-Browser: https://salsa.debian.org/debian/deepin-community-template-repository
-#Vcs-Git: https://salsa.debian.org/debian/deepin-community-template-repository.git
+Maintainer: Debian Ruby Team <pkg-ruby-extras-maintainers@lists.alioth.debian.org>
+Uploaders: Lucas Nussbaum <lucas@debian.org>,
+           Cédric Boutillier <boutil@debian.org>,
+           Pirate Praveen <praveen@debian.org>,
+           Georg Faerber <georg@debian.org>
+Build-Depends: debhelper-compat (= 13),
+               gem2deb (>= 1),
+               racc (>= 1.4),
+               rake,
+               libxml2-dev,
+               libxslt-dev,
+               pkg-config,
+               rake-compiler,
+               ruby-mini-portile2 (>= 2.8.2~),
+               ruby-minitest <!nocheck>,
+               ruby-minitest-reporters <!nocheck>,
+               ruby-pkg-config <!nocheck>,
+               ruby-simplecov <!nocheck>,
+               ruby-zip <!nocheck>,
+               zlib1g-dev
+Standards-Version: 4.6.2
+Vcs-Git: https://salsa.debian.org/ruby-team/ruby-nokogiri.git
+Vcs-Browser: https://salsa.debian.org/ruby-team/ruby-nokogiri
+Homepage: https://nokogiri.org
+Testsuite: autopkgtest-pkg-ruby
+Rules-Requires-Root: no
 
-Package: template-repository
+Package: ruby-nokogiri
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
-Description: <insert up to 60 chars description>
- <insert long description, indented with spaces>
+Depends: ${misc:Depends},
+         ${ruby:Depends},
+         ${shlibs:Depends},
+         ruby-pkg-config
+Breaks: ruby-sanitize (<< 5.2.3-2), ruby-nokogumbo (<< 2.0.3)
+Description: HTML, XML, SAX, and Reader parser for Ruby
+ Nokogiri (鋸) is an HTML, XML, SAX, and Reader parser.  It is able to
+ search documents via XPath or CSS3 selectors, and is a drop-in replacement
+ for Hpricot (though not bug for bug).

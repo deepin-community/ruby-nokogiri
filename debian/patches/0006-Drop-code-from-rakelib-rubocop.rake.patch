@@ -1,0 +1,21 @@
+From: Antonio Terceiro <terceiro@debian.org>
+Date: Thu, 15 Dec 2022 11:39:12 -0300
+Subject: Drop code from rakelib/rubocop.rake
+
+This is loaded unconditionally by rake when executed by
+gem2deb-test-runner, making the build require having rubocop installed,
+what is not really warranted.
+---
+ rakelib/rubocop.rake | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/rakelib/rubocop.rake b/rakelib/rubocop.rake
+index e6f0c55..71f48fb 100644
+--- a/rakelib/rubocop.rake
++++ b/rakelib/rubocop.rake
+@@ -1,4 +1,5 @@
+ # frozen_string_literal: true
++__END__
+ 
+ begin
+   require("rubocop/rake_task")
