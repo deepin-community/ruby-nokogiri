@@ -1,3 +1,45 @@
+ruby-nokogiri (1.18.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream version 1.18.2+dfsg
+
+ -- Cédric Boutillier <boutil@debian.org>  Tue, 28 Jan 2025 17:43:46 +0100
+
+ruby-nokogiri (1.17.2+dfsg-1~exp1) experimental; urgency=medium
+
+  * New upstream version 1.17.2+dfsg
+  * Update control file with dh-make-ruby -w
+  * Refresh patches
+  * Bump version build-dependency on ruby-minitest
+  * Bump Standards-Version to 4.7.0 (no changes needed)
+  * Breaks some packages
+
+ -- Cédric Boutillier <boutil@debian.org>  Mon, 16 Dec 2024 18:46:30 +0100
+
+ruby-nokogiri (1.16.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream version 1.16.2+dfsg
+  * New upstream version 1.16.4+dfsg
+
+ -- Lucas Nussbaum <lucas@debian.org>  Mon, 06 May 2024 11:08:42 +0000
+
+ruby-nokogiri (1.16.0+dfsg-2) unstable; urgency=medium
+
+  * Team upload.
+  * d/p/0005-test-helper.rb-ignore-GC-compaction-on-unsupported-p.patch:
+    rescue the NotImplementedError in a new method. This fixes a FTBFS in
+    ppc64el.
+  * d/control: b-d on pkgconf instead of pkg-config.
+
+ -- Lucas Kanashiro <kanashiro@debian.org>  Fri, 09 Feb 2024 16:46:19 -0300
+
+ruby-nokogiri (1.16.0+dfsg-1) unstable; urgency=medium
+
+  * New upstream version
+  * Reorder sequence of d/control fields by cme (routine-update)
+  * Refresh patches
+
+ -- Pirate Praveen <praveen@debian.org>  Mon, 22 Jan 2024 19:13:24 +0530
+
 ruby-nokogiri (1.15.4+dfsg-1) unstable; urgency=medium
 
   * New upstream version 1.15.4+dfsg

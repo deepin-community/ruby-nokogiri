@@ -12,8 +12,8 @@ require "pathname"
 
 # helpful constants
 PACKAGE_ROOT_DIR = File.expand_path(File.join(File.dirname(__FILE__), "..", ".."))
-REQUIRED_LIBXML_VERSION = "2.6.21"
-RECOMMENDED_LIBXML_VERSION = "2.9.3"
+REQUIRED_LIBXML_VERSION = "2.9.2"
+RECOMMENDED_LIBXML_VERSION = "2.12.0"
 
 REQUIRED_MINI_PORTILE_VERSION = "~> 2.8.2" # keep this version in sync with the one in the gemspec
 REQUIRED_PKG_CONFIG_VERSION = "~> 1.1"
@@ -57,30 +57,6 @@ NOKOGIRI_HELP_MESSAGE = <<~HELP
             Look for headers in DIRECTORY.
 
 
-      Related to zlib:
-
-        --with-zlib-dir=DIRECTORY
-            Look for zlib headers and library in DIRECTORY.
-
-        --with-zlib-lib=DIRECTORY
-            Look for zlib library in DIRECTORY.
-
-        --with-zlib-include=DIRECTORY
-            Look for zlib headers in DIRECTORY.
-
-
-      Related to iconv:
-
-        --with-iconv-dir=DIRECTORY
-            Look for iconv headers and library in DIRECTORY.
-
-        --with-iconv-lib=DIRECTORY
-            Look for iconv library in DIRECTORY.
-
-        --with-iconv-include=DIRECTORY
-            Look for iconv headers in DIRECTORY.
-
-
       Related to libxml2:
 
         --with-xml2-dir=DIRECTORY
@@ -94,6 +70,10 @@ NOKOGIRI_HELP_MESSAGE = <<~HELP
 
         --with-xml2-source-dir=DIRECTORY
             (dev only) Build libxml2 from the source code in DIRECTORY
+
+        --disable-xml2-legacy
+            Do not build libxml2 with zlib, liblzma, or HTTP support. This will become the default
+            in a future version of Nokogiri.
 
 
       Related to libxslt:
@@ -123,6 +103,30 @@ NOKOGIRI_HELP_MESSAGE = <<~HELP
             Look for exslt headers in DIRECTORY.
 
 
+      Related to iconv:
+
+        --with-iconv-dir=DIRECTORY
+            Look for iconv headers and library in DIRECTORY.
+
+        --with-iconv-lib=DIRECTORY
+            Look for iconv library in DIRECTORY.
+
+        --with-iconv-include=DIRECTORY
+            Look for iconv headers in DIRECTORY.
+
+
+      Related to zlib (ignored if `--disable-xml2-legacy` is used):
+
+        --with-zlib-dir=DIRECTORY
+            Look for zlib headers and library in DIRECTORY.
+
+        --with-zlib-lib=DIRECTORY
+            Look for zlib library in DIRECTORY.
+
+        --with-zlib-include=DIRECTORY
+            Look for zlib headers in DIRECTORY.
+
+
     Flags only used when building and using the packaged libraries:
 
       --disable-static
@@ -137,6 +141,9 @@ NOKOGIRI_HELP_MESSAGE = <<~HELP
       NOKOGIRI_USE_SYSTEM_LIBRARIES
           Equivalent to `--enable-system-libraries` when set, even if nil or blank.
 
+      AR
+          Use this path to invoke the library archiver instead of `RbConfig::CONFIG['AR']`
+
       CC
           Use this path to invoke the compiler instead of `RbConfig::CONFIG['CC']`
 
@@ -145,6 +152,9 @@ NOKOGIRI_HELP_MESSAGE = <<~HELP
 
       CFLAGS
           If this string is accepted by the compiler, add it to the flags passed to the compiler
+
+      LD
+          Use this path to invoke the linker instead of `RbConfig::CONFIG['LD']`
 
       LDFLAGS
           If this string is accepted by the linker, add it to the flags passed to the linker
@@ -175,6 +185,10 @@ def config_system_libraries?
   end
 end
 
+def config_with_xml2_legacy?
+  enable_config("xml2-legacy", true)
+end
+
 def windows?
   RbConfig::CONFIG["target_os"].match?(/mingw|mswin/)
 end
@@ -195,8 +209,12 @@ def aix?
   RbConfig::CONFIG["target_os"].include?("aix")
 end
 
-def nix?
+def unix?
   !(windows? || solaris? || darwin?)
+end
+
+def nix?
+  ENV.key?("NIX_CC")
 end
 
 def truffle?
@@ -443,7 +461,7 @@ def process_recipe(name, version, static_p, cross_p, cacheable_p = true)
     # We use 'host' to set compiler prefix for cross-compiling. Prefer host_alias over host. And
     # prefer i686 (what external dev tools use) to i386 (what ruby's configure.ac emits).
     recipe.host = RbConfig::CONFIG["host_alias"].empty? ? RbConfig::CONFIG["host"] : RbConfig::CONFIG["host_alias"]
-    recipe.host = recipe.host.gsub(/i386/, "i686")
+    recipe.host = recipe.host.gsub("i386", "i686")
 
     recipe.target = File.join(PACKAGE_ROOT_DIR, "ports") if cacheable_p
     recipe.configure_options << "--libdir=#{File.join(recipe.path, "lib")}"
@@ -626,12 +644,22 @@ if openbsd? && !config_system_libraries?
   append_cppflags "-I/usr/local/include"
 end
 
+if ENV["AR"]
+  RbConfig::CONFIG["AR"] = RbConfig::MAKEFILE_CONFIG["AR"] = ENV["AR"]
+end
+
 if ENV["CC"]
   RbConfig::CONFIG["CC"] = RbConfig::MAKEFILE_CONFIG["CC"] = ENV["CC"]
 end
 
-# use same c compiler for libxml and libxslt
+if ENV["LD"]
+  RbConfig::CONFIG["LD"] = RbConfig::MAKEFILE_CONFIG["LD"] = ENV["LD"]
+end
+
+# use same toolchain for libxml and libxslt
+ENV["AR"] = RbConfig::CONFIG["AR"]
 ENV["CC"] = RbConfig::CONFIG["CC"]
+ENV["LD"] = RbConfig::CONFIG["LD"]
 
 if arg_config("--prevent-strip")
   old_cflags = $CFLAGS.split.join(" ")
@@ -646,13 +674,12 @@ if arg_config("--prevent-strip")
 end
 
 # adopt environment config
-append_cflags(ENV["CFLAGS"].split) unless ENV["CFLAGS"].nil?
-append_cppflags(ENV["CPPFLAGS"].split) unless ENV["CPPFLAGS"].nil?
-append_ldflags(ENV["LDFLAGS"].split) unless ENV["LDFLAGS"].nil?
+append_cflags(ENV["CFLAGS"]) unless ENV["CFLAGS"].nil?
+append_cppflags(ENV["CPPFLAGS"]) unless ENV["CPPFLAGS"].nil?
+append_ldflags(ENV["LDFLAGS"]) unless ENV["LDFLAGS"].nil?
 $LIBS = concat_flags($LIBS, ENV["LIBS"])
 
-# nokogumbo code uses C90/C99 features, let's make sure older compilers won't give
-# errors/warnings. see #2302
+# libgumbo uses C90/C99 features, see #2302
 append_cflags(["-std=c99", "-Wno-declaration-after-statement"])
 
 # gumbo html5 serialization is slower with O3, let's make sure we use O2
@@ -667,12 +694,9 @@ append_cflags("-Winline")
 # good to have no matter what Ruby was compiled with
 append_cflags("-Wmissing-noreturn")
 
-# check integer loss of precision
-if darwin?
-  append_cflags("-Wshorten-64-to-32")
-else
-  append_cflags("-Wconversion -Wno-sign-conversion")
-end
+# check integer loss of precision. this flag won't generally work until Ruby 3.4.
+# see https://bugs.ruby-lang.org/issues/20507
+append_cflags("-Wconversion")
 
 # handle clang variations, see #1101
 if darwin?
@@ -685,7 +709,7 @@ end
 
 # Add SDK-specific include path for macOS and brew versions before v2.2.12 (2020-04-08) [#1851, #1801]
 macos_mojave_sdk_include_path = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/libxml2"
-if config_system_libraries? && darwin? && Dir.exist?(macos_mojave_sdk_include_path)
+if config_system_libraries? && darwin? && Dir.exist?(macos_mojave_sdk_include_path) && !nix?
   append_cppflags("-I#{macos_mojave_sdk_include_path}")
 end
 
@@ -695,13 +719,15 @@ append_cppflags(' "-Idummypath"') if windows?
 
 if config_system_libraries?
   message "Building nokogiri using system libraries.\n"
-  ensure_package_configuration(
-    opt: "zlib",
-    pc: "zlib",
-    lib: "z",
-    headers: "zlib.h",
-    func: "gzdopen",
-  )
+  if config_with_xml2_legacy?
+    ensure_package_configuration(
+      opt: "zlib",
+      pc: "zlib",
+      lib: "z",
+      headers: "zlib.h",
+      func: "gzdopen",
+    )
+  end
   ensure_package_configuration(
     opt: "xml2",
     pc: "libxml-2.0",
@@ -745,58 +771,60 @@ else
   require "yaml"
   dependencies = YAML.load_file(File.join(PACKAGE_ROOT_DIR, "dependencies.yml"))
 
-  dir_config("zlib")
+  dir_config("zlib") if config_with_xml2_legacy?
 
   if cross_build_p || windows?
-    zlib_recipe = process_recipe("zlib", dependencies["zlib"]["version"], static_p, cross_build_p) do |recipe|
-      recipe.files = [{
-        url: zlib_source(recipe.version),
-        sha256: dependencies["zlib"]["sha256"],
-      }]
-      if windows?
-        class << recipe
-          attr_accessor :cross_build_p
+    if config_with_xml2_legacy?
+      zlib_recipe = process_recipe("zlib", dependencies["zlib"]["version"], static_p, cross_build_p) do |recipe|
+        recipe.files = [{
+          url: zlib_source(recipe.version),
+          sha256: dependencies["zlib"]["sha256"],
+        }]
+        if windows?
+          class << recipe
+            attr_accessor :cross_build_p
 
-          def configure
-            Dir.chdir(work_path) do
-              mk = File.read("win32/Makefile.gcc")
-              File.open("win32/Makefile.gcc", "wb") do |f|
-                f.puts "BINARY_PATH = #{path}/bin"
-                f.puts "LIBRARY_PATH = #{path}/lib"
-                f.puts "INCLUDE_PATH = #{path}/include"
-                mk.sub!(/^PREFIX\s*=\s*$/, "PREFIX = #{host}-") if cross_build_p
-                f.puts mk
+            def configure
+              Dir.chdir(work_path) do
+                mk = File.read("win32/Makefile.gcc")
+                File.open("win32/Makefile.gcc", "wb") do |f|
+                  f.puts "BINARY_PATH = #{path}/bin"
+                  f.puts "LIBRARY_PATH = #{path}/lib"
+                  f.puts "INCLUDE_PATH = #{path}/include"
+                  mk.sub!(/^PREFIX\s*=\s*$/, "PREFIX = #{host}-") if cross_build_p
+                  f.puts mk
+                end
               end
             end
-          end
 
-          def configured?
-            Dir.chdir(work_path) do
-              !!(File.read("win32/Makefile.gcc") =~ /^BINARY_PATH/)
+            def configured?
+              Dir.chdir(work_path) do
+                !!(File.read("win32/Makefile.gcc") =~ /^BINARY_PATH/)
+              end
+            end
+
+            def compile
+              execute("compile", "make -f win32/Makefile.gcc")
+            end
+
+            def install
+              execute("install", "make -f win32/Makefile.gcc install")
             end
           end
-
-          def compile
-            execute("compile", "make -f win32/Makefile.gcc")
-          end
-
-          def install
-            execute("install", "make -f win32/Makefile.gcc install")
-          end
-        end
-        recipe.cross_build_p = cross_build_p
-      else
-        class << recipe
-          def configure
-            env = {}
-            env["CFLAGS"] = concat_flags(ENV["CFLAGS"], "-fPIC", "-g")
-            env["CHOST"] = host
-            execute("configure", ["./configure", "--static", configure_prefix], { env: env })
-            if darwin?
-              # needed as of zlib 1.2.13
-              Dir.chdir(work_path) do
-                makefile = File.read("Makefile").gsub(/^AR=.*$/, "AR=#{host}-libtool")
-                File.open("Makefile", "w") { |m| m.write(makefile) }
+          recipe.cross_build_p = cross_build_p
+        else
+          class << recipe
+            def configure
+              env = {}
+              env["CFLAGS"] = concat_flags(ENV["CFLAGS"], "-fPIC", "-g")
+              env["CHOST"] = host
+              execute("configure", ["./configure", "--static", configure_prefix], { env: env })
+              if darwin?
+                # needed as of zlib 1.2.13
+                Dir.chdir(work_path) do
+                  makefile = File.read("Makefile").gsub(/^AR=.*$/, "AR=#{host}-libtool")
+                  File.open("Makefile", "w") { |m| m.write(makefile) }
+                end
               end
             end
           end
@@ -804,7 +832,7 @@ else
       end
     end
 
-    unless nix?
+    unless unix?
       libiconv_recipe = process_recipe(
         "libiconv",
         dependencies["libiconv"]["version"],
@@ -819,7 +847,7 @@ else
         # The libiconv configure script doesn't accept "arm64" host string but "aarch64"
         recipe.host = recipe.host.gsub("arm64-apple-darwin", "aarch64-apple-darwin")
 
-        cflags = concat_flags(ENV["CFLAGS"], "-O2", "-U_FORTIFY_SOURCE", "-g")
+        cflags = concat_flags(ENV["CFLAGS"], "-O2", "-g")
 
         recipe.configure_options += [
           "--disable-dependency-tracking",
@@ -883,10 +911,14 @@ else
     end
 
     cppflags = concat_flags(ENV["CPPFLAGS"])
-    cflags = concat_flags(ENV["CFLAGS"], "-O2", "-U_FORTIFY_SOURCE", "-g")
+    cflags = concat_flags(ENV["CFLAGS"], "-O2", "-g")
 
     if cross_build_p
       cppflags = concat_flags(cppflags, "-DNOKOGIRI_PRECOMPILED_LIBRARIES")
+    end
+
+    if config_with_xml2_legacy?
+      recipe.configure_options << "--with-legacy"
     end
 
     if zlib_recipe
@@ -900,7 +932,8 @@ else
     end
 
     if darwin? && !cross_build_p
-      recipe.configure_options += ["RANLIB=/usr/bin/ranlib", "AR=/usr/bin/ar"]
+      recipe.configure_options << "RANLIB=/usr/bin/ranlib" unless ENV.key?("RANLIB")
+      recipe.configure_options << "AR=/usr/bin/ar" unless ENV.key?("AR")
     end
 
     if windows?
@@ -937,10 +970,11 @@ else
       recipe.patch_files = Dir[File.join(PACKAGE_ROOT_DIR, "patches", "libxslt", "*.patch")].sort
     end
 
-    cflags = concat_flags(ENV["CFLAGS"], "-O2", "-U_FORTIFY_SOURCE", "-g")
+    cflags = concat_flags(ENV["CFLAGS"], "-O2", "-g")
 
     if darwin? && !cross_build_p
-      recipe.configure_options += ["RANLIB=/usr/bin/ranlib", "AR=/usr/bin/ar"]
+      recipe.configure_options << "RANLIB=/usr/bin/ranlib" unless ENV.key?("RANLIB")
+      recipe.configure_options << "AR=/usr/bin/ar" unless ENV.key?("AR")
     end
 
     if windows?
@@ -1031,64 +1065,75 @@ else
   ensure_func("exsltFuncRegister", "libexslt/exslt.h")
 end
 
-libgumbo_recipe = process_recipe("libgumbo", "1.0.0-nokogiri", static_p, cross_build_p, false) do |recipe|
-  recipe.configure_options = []
+if arg_config("--gumbo-dev")
+  message("DEV MODE ENABLED: build libgumbo as packaged source")
+  ext_dir = File.dirname(__FILE__)
+  Dir.chdir(ext_dir) do
+    $srcs = Dir["*.c", "../../gumbo-parser/src/*.c"]
+    $hdrs = Dir["*.h", "../../gumbo-parser/src/*.h"]
+  end
+  $INCFLAGS << " -I$(srcdir)/../../gumbo-parser/src"
+  $VPATH << "$(srcdir)/../../gumbo-parser/src"
+  find_header("nokogiri_gumbo.h") || abort("nokogiri_gumbo.h not found")
+else
+  libgumbo_recipe = process_recipe("libgumbo", "1.0.0-nokogiri", static_p, cross_build_p, false) do |recipe|
+    recipe.configure_options = []
 
-  class << recipe
-    def downloaded?
-      true
-    end
-
-    def extract
-      target = File.join(tmp_path, "gumbo-parser")
-      output("Copying gumbo-parser files into #{target}...")
-      FileUtils.mkdir_p(target)
-      FileUtils.cp(Dir.glob(File.join(PACKAGE_ROOT_DIR, "gumbo-parser/src/*")), target)
-    end
-
-    def configured?
-      true
-    end
-
-    def install
-      lib_dir = File.join(port_path, "lib")
-      inc_dir = File.join(port_path, "include")
-      FileUtils.mkdir_p([lib_dir, inc_dir])
-      FileUtils.cp(File.join(work_path, "libgumbo.a"), lib_dir)
-      FileUtils.cp(Dir.glob(File.join(work_path, "*.h")), inc_dir)
-    end
-
-    def compile
-      cflags = concat_flags(ENV["CFLAGS"], "-fPIC", "-O2", "-g")
-
-      env = { "CC" => gcc_cmd, "CFLAGS" => cflags }
-      if config_cross_build?
-        if host.include?("darwin")
-          env["AR"] = "#{host}-libtool"
-          env["ARFLAGS"] = "-o"
-        else
-          env["AR"] = "#{host}-ar"
-        end
-        env["RANLIB"] = "#{host}-ranlib"
+    class << recipe
+      def downloaded?
+        true
       end
 
-      execute("compile", make_cmd, { env: env })
+      def extract
+        target = File.join(tmp_path, "gumbo-parser")
+        output("Copying gumbo-parser files into #{target}...")
+        FileUtils.mkdir_p(target)
+        FileUtils.cp(Dir.glob(File.join(PACKAGE_ROOT_DIR, "gumbo-parser/src/*")), target)
+      end
+
+      def configured?
+        true
+      end
+
+      def install
+        lib_dir = File.join(port_path, "lib")
+        inc_dir = File.join(port_path, "include")
+        FileUtils.mkdir_p([lib_dir, inc_dir])
+        FileUtils.cp(File.join(work_path, "libgumbo.a"), lib_dir)
+        FileUtils.cp(Dir.glob(File.join(work_path, "*.h")), inc_dir)
+      end
+
+      def compile
+        cflags = concat_flags(ENV["CFLAGS"], "-fPIC", "-O2", "-g")
+
+        env = { "CC" => gcc_cmd, "CFLAGS" => cflags }
+        if config_cross_build?
+          if host.include?("darwin")
+            env["AR"] = "#{host}-libtool"
+            env["ARFLAGS"] = "-o"
+          else
+            env["AR"] = "#{host}-ar"
+          end
+          env["RANLIB"] = "#{host}-ranlib"
+          if windows?
+            concat_flags(env["CFLAGS"], "-D_RUBY_UCRT")
+          end
+        end
+
+        execute("compile", make_cmd, { env: env })
+      end
     end
   end
+  append_cppflags("-I#{File.join(libgumbo_recipe.path, "include")}")
+  $libs = $libs + " " + File.join(libgumbo_recipe.path, "lib", "libgumbo.a")
+  $LIBPATH = $LIBPATH | [File.join(libgumbo_recipe.path, "lib")]
+  ensure_func("gumbo_parse_with_options", "nokogiri_gumbo.h")
 end
-append_cppflags("-I#{File.join(libgumbo_recipe.path, "include")}")
-$libs = $libs + " " + File.join(libgumbo_recipe.path, "lib", "libgumbo.a")
-$LIBPATH = $LIBPATH | [File.join(libgumbo_recipe.path, "lib")]
-ensure_func("gumbo_parse_with_options", "nokogiri_gumbo.h")
 
-have_func("xmlHasFeature") || abort("xmlHasFeature() is missing.") # introduced in libxml 2.6.21
-have_func("xmlFirstElementChild") # introduced in libxml 2.7.3
-have_func("xmlRelaxNGSetParserStructuredErrors") # introduced in libxml 2.6.24
-have_func("xmlRelaxNGSetValidStructuredErrors") # introduced in libxml 2.6.21
-have_func("xmlSchemaSetValidStructuredErrors") # introduced in libxml 2.6.23
-have_func("xmlSchemaSetParserStructuredErrors") # introduced in libxml 2.6.23
-have_func("rb_gc_location") # introduced in Ruby 2.7
-have_func("rb_category_warning") # introduced in Ruby 3.0
+have_func("xmlCtxtSetOptions") # introduced in libxml2 2.13.0
+have_func("xmlCtxtGetOptions") # introduced in libxml2 2.14.0
+have_func("xmlSwitchEncodingName") # introduced in libxml2 2.13.0
+have_func("rb_category_warning") # introduced in Ruby 3.0 but had trouble resolving this symbol in truffleruby
 
 other_library_versions_string = OTHER_LIBRARY_VERSIONS.map { |k, v| [k, v].join(":") }.join(",")
 append_cppflags(%[-DNOKOGIRI_OTHER_LIBRARY_VERSIONS="\\"#{other_library_versions_string}\\""])
@@ -1119,7 +1164,7 @@ if config_clean?
     mk.print(<<~EOF)
 
       all: clean-ports
-      clean-ports: $(DLLIB)
+      clean-ports: $(TARGET_SO)
       \t-$(Q)$(RUBY) $(srcdir)/extconf.rb --clean --#{static_p ? "enable" : "disable"}-static
     EOF
   end

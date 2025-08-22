@@ -17,6 +17,8 @@ dealloc_node_i2(xmlNodePtr key, xmlNodePtr node, xmlDocPtr doc)
       break;
     default:
       if (node->parent == NULL) {
+        node->next = NULL;
+        node->prev = NULL;
         xmlAddChild((xmlNodePtr)doc, node);
       }
   }
@@ -74,8 +76,10 @@ dealloc(void *data)
 
   ruby_xfree(doc->_private);
 
+#if defined(__GNUC__) && __GNUC__ >= 5
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations" // xmlDeregisterNodeDefault is deprecated as of libxml2 2.11.0
+#endif
   /*
    * libxml-ruby < 3.0.0 uses xmlDeregisterNodeDefault. If the user is using one of those older
    * versions, the registered callback from libxml-ruby will access the _private pointers set by
@@ -90,7 +94,9 @@ dealloc(void *data)
   if (xmlDeregisterNodeDefaultValue) {
     remove_private((xmlNodePtr)doc);
   }
+#if defined(__GNUC__) && __GNUC__ >= 5
 #pragma GCC diagnostic pop
+#endif
 
   xmlFreeDoc(doc);
 }
@@ -103,7 +109,7 @@ memsize_node(const xmlNodePtr node)
   xmlAttrPtr property;
   size_t memsize = 0;
 
-  memsize += xmlStrlen(node->name);
+  memsize += (size_t)xmlStrlen(node->name);
 
   if (node->type == XML_ELEMENT_NODE) {
     for (property = node->properties; property; property = property->next) {
@@ -111,7 +117,7 @@ memsize_node(const xmlNodePtr node)
     }
   }
   if (node->type == XML_TEXT_NODE) {
-    memsize += xmlStrlen(node->content);
+    memsize += (size_t)xmlStrlen(node->content);
   }
   for (child = node->children; child; child = child->next) {
     memsize += sizeof(xmlNode) + memsize_node(child);
@@ -129,8 +135,8 @@ memsize(const void *data)
   return memsize;
 }
 
-static const rb_data_type_t noko_xml_document_data_type = {
-  .wrap_struct_name = "Nokogiri::XML::Document",
+static const rb_data_type_t xml_doc_type = {
+  .wrap_struct_name = "xmlDoc",
   .function = {
     .dmark = mark,
     .dfree = dealloc,
@@ -138,6 +144,53 @@ static const rb_data_type_t noko_xml_document_data_type = {
   },
   // .flags = RUBY_TYPED_FREE_IMMEDIATELY, // TODO see https://github.com/sparklemotion/nokogiri/issues/2822
 };
+
+static VALUE
+_xml_document_alloc(VALUE klass)
+{
+  return TypedData_Wrap_Struct(klass, &xml_doc_type, NULL);
+}
+
+static void
+_xml_document_data_ptr_set(VALUE rb_document, xmlDocPtr c_document)
+{
+  nokogiriTuplePtr tuple;
+
+  assert(DATA_PTR(rb_document) == NULL);
+  assert(c_document->_private == NULL);
+
+  DATA_PTR(rb_document) = c_document;
+
+  tuple = (nokogiriTuplePtr)ruby_xmalloc(sizeof(nokogiriTuple));
+  tuple->doc = rb_document;
+  tuple->unlinkedNodes = st_init_numtable_with_size(128);
+  tuple->node_cache = rb_ary_new();
+
+  c_document->_private = tuple ;
+
+  rb_iv_set(rb_document, "@node_cache", tuple->node_cache);
+
+  return;
+}
+
+/* :nodoc: */
+static VALUE
+rb_xml_document_initialize_copy_with_args(VALUE rb_self, VALUE rb_other, VALUE rb_level)
+{
+  xmlDocPtr c_other, c_self;
+  int c_level;
+
+  c_other = noko_xml_document_unwrap(rb_other);
+  c_level = (int)NUM2INT(rb_level);
+
+  c_self = xmlCopyDoc(c_other, c_level);
+  if (c_self == NULL) { return Qnil; }
+
+  c_self->type = c_other->type;
+  _xml_document_data_ptr_set(rb_self, c_self);
+
+  return rb_self ;
+}
 
 static void
 recursively_remove_namespaces_from_node(xmlNodePtr node)
@@ -311,49 +364,46 @@ version(VALUE self)
  * Create a new document from an IO object
  */
 static VALUE
-read_io(VALUE klass,
-        VALUE io,
-        VALUE url,
-        VALUE encoding,
-        VALUE options)
+noko_xml_document_s_read_io(VALUE rb_class,
+                            VALUE rb_io,
+                            VALUE rb_url,
+                            VALUE rb_encoding,
+                            VALUE rb_options)
 {
-  const char *c_url    = NIL_P(url)      ? NULL : StringValueCStr(url);
-  const char *c_enc    = NIL_P(encoding) ? NULL : StringValueCStr(encoding);
-  VALUE error_list      = rb_ary_new();
-  VALUE document;
-  xmlDocPtr doc;
+  /* TODO: deprecate this method, parse should be the preferred entry point. then we can make this
+     private. */
+  libxmlStructuredErrorHandlerState handler_state;
+  VALUE rb_errors = rb_ary_new();
 
-  xmlResetLastError();
-  xmlSetStructuredErrorFunc((void *)error_list, Nokogiri_error_array_pusher);
+  noko__structured_error_func_save_and_set(&handler_state, (void *)rb_errors, noko__error_array_pusher);
 
-  doc = xmlReadIO(
-          (xmlInputReadCallback)noko_io_read,
-          (xmlInputCloseCallback)noko_io_close,
-          (void *)io,
-          c_url,
-          c_enc,
-          (int)NUM2INT(options)
-        );
-  xmlSetStructuredErrorFunc(NULL, NULL);
+  const char *c_url    = NIL_P(rb_url)      ? NULL : StringValueCStr(rb_url);
+  const char *c_enc    = NIL_P(rb_encoding) ? NULL : StringValueCStr(rb_encoding);
+  xmlDocPtr c_document = xmlReadIO(
+                           (xmlInputReadCallback)noko_io_read,
+                           (xmlInputCloseCallback)noko_io_close,
+                           (void *)rb_io,
+                           c_url,
+                           c_enc,
+                           (int)NUM2INT(rb_options)
+                         );
 
-  if (doc == NULL) {
-    xmlErrorPtr error;
+  noko__structured_error_func_restore(&handler_state);
 
-    xmlFreeDoc(doc);
+  if (c_document == NULL) {
+    xmlFreeDoc(c_document);
 
-    error = xmlGetLastError();
-    if (error) {
-      rb_exc_raise(Nokogiri_wrap_xml_syntax_error(error));
+    VALUE exception = rb_funcall(cNokogiriXmlSyntaxError, rb_intern("aggregate"), 1, rb_errors);
+    if (RB_TEST(exception)) {
+      rb_exc_raise(exception);
     } else {
       rb_raise(rb_eRuntimeError, "Could not parse document");
     }
-
-    return Qnil;
   }
 
-  document = noko_xml_document_wrap(klass, doc);
-  rb_iv_set(document, "@errors", error_list);
-  return document;
+  VALUE rb_document = noko_xml_document_wrap(rb_class, c_document);
+  rb_iv_set(rb_document, "@errors", rb_errors);
+  return rb_document;
 }
 
 /*
@@ -363,80 +413,44 @@ read_io(VALUE klass,
  * Create a new document from a String
  */
 static VALUE
-read_memory(VALUE klass,
-            VALUE string,
-            VALUE url,
-            VALUE encoding,
-            VALUE options)
+noko_xml_document_s_read_memory(VALUE rb_class,
+                                VALUE rb_input,
+                                VALUE rb_url,
+                                VALUE rb_encoding,
+                                VALUE rb_options)
 {
-  const char *c_buffer = StringValuePtr(string);
-  const char *c_url    = NIL_P(url)      ? NULL : StringValueCStr(url);
-  const char *c_enc    = NIL_P(encoding) ? NULL : StringValueCStr(encoding);
-  int len               = (int)RSTRING_LEN(string);
-  VALUE error_list      = rb_ary_new();
-  VALUE document;
-  xmlDocPtr doc;
+  /* TODO: deprecate this method, parse should be the preferred entry point. then we can make this
+     private. */
+  VALUE rb_errors = rb_ary_new();
+  xmlSetStructuredErrorFunc((void *)rb_errors, noko__error_array_pusher);
 
-  xmlResetLastError();
-  xmlSetStructuredErrorFunc((void *)error_list, Nokogiri_error_array_pusher);
-  doc = xmlReadMemory(c_buffer, len, c_url, c_enc, (int)NUM2INT(options));
+  const char *c_buffer = StringValuePtr(rb_input);
+  const char *c_url    = NIL_P(rb_url)      ? NULL : StringValueCStr(rb_url);
+  const char *c_enc    = NIL_P(rb_encoding) ? NULL : StringValueCStr(rb_encoding);
+  int c_buffer_len     = (int)RSTRING_LEN(rb_input);
+  xmlDocPtr c_document = xmlReadMemory(c_buffer, c_buffer_len, c_url, c_enc, (int)NUM2INT(rb_options));
+
   xmlSetStructuredErrorFunc(NULL, NULL);
 
-  if (doc == NULL) {
-    xmlErrorPtr error;
-
-    xmlFreeDoc(doc);
-
-    error = xmlGetLastError();
-    if (error) {
-      rb_exc_raise(Nokogiri_wrap_xml_syntax_error(error));
+  if (c_document == NULL) {
+    VALUE exception = rb_funcall(cNokogiriXmlSyntaxError, rb_intern("aggregate"), 1, rb_errors);
+    if (RB_TEST(exception)) {
+      rb_exc_raise(exception);
     } else {
       rb_raise(rb_eRuntimeError, "Could not parse document");
     }
-
-    return Qnil;
   }
 
-  document = noko_xml_document_wrap(klass, doc);
-  rb_iv_set(document, "@errors", error_list);
+  VALUE document = noko_xml_document_wrap(rb_class, c_document);
+  rb_iv_set(document, "@errors", rb_errors);
   return document;
 }
 
 /*
  * call-seq:
- *  dup
+ *  new(version = "1.0")
  *
- * Copy this Document.  An optional depth may be passed in, but it defaults
- * to a deep copy.  0 is a shallow copy, 1 is a deep copy.
- */
-static VALUE
-duplicate_document(int argc, VALUE *argv, VALUE self)
-{
-  xmlDocPtr doc, dup;
-  VALUE copy;
-  VALUE level;
-
-  if (rb_scan_args(argc, argv, "01", &level) == 0) {
-    level = INT2NUM((long)1);
-  }
-
-  doc = noko_xml_document_unwrap(self);
-
-  dup = xmlCopyDoc(doc, (int)NUM2INT(level));
-
-  if (dup == NULL) { return Qnil; }
-
-  dup->type = doc->type;
-  copy = noko_xml_document_wrap(rb_obj_class(self), dup);
-  rb_iv_set(copy, "@errors", rb_iv_get(self, "@errors"));
-  return copy ;
-}
-
-/*
- * call-seq:
- *  new(version = default)
- *
- * Create a new document with +version+ (defaults to "1.0")
+ * Create a new empty document declaring XML version +version+.
  */
 static VALUE
 new (int argc, VALUE *argv, VALUE klass)
@@ -499,55 +513,58 @@ remove_namespaces_bang(VALUE self)
   return self;
 }
 
-/* call-seq: doc.create_entity(name, type, external_id, system_id, content)
+/* call-seq:
+ *   doc.create_entity(name, type, external_id, system_id, content)
  *
  * Create a new entity named +name+.
  *
- * +type+ is an integer representing the type of entity to be created, and it
- * defaults to Nokogiri::XML::EntityDecl::INTERNAL_GENERAL.  See
- * the constants on Nokogiri::XML::EntityDecl for more information.
+ * +type+ is an integer representing the type of entity to be created, and it defaults to
+ * +Nokogiri::XML::EntityDecl::INTERNAL_GENERAL+. See the constants on Nokogiri::XML::EntityDecl for
+ * more information.
  *
  * +external_id+, +system_id+, and +content+ set the External ID, System ID,
  * and content respectively.  All of these parameters are optional.
  */
 static VALUE
-create_entity(int argc, VALUE *argv, VALUE self)
+noko_xml_document__create_entity(int argc, VALUE *argv, VALUE rb_document)
 {
-  VALUE name;
-  VALUE type;
-  VALUE external_id;
-  VALUE system_id;
-  VALUE content;
-  xmlEntityPtr ptr;
-  xmlDocPtr doc ;
+  VALUE rb_name;
+  VALUE rb_type;
+  VALUE rb_ext_id;
+  VALUE rb_sys_id;
+  VALUE rb_content;
 
-  doc = noko_xml_document_unwrap(self);
+  rb_scan_args(argc, argv, "14",
+               &rb_name,
+               &rb_type, &rb_ext_id, &rb_sys_id, &rb_content);
 
-  rb_scan_args(argc, argv, "14", &name, &type, &external_id, &system_id,
-               &content);
+  xmlDocPtr c_document = noko_xml_document_unwrap(rb_document);
 
-  xmlResetLastError();
-  ptr = xmlAddDocEntity(
-          doc,
-          (xmlChar *)(NIL_P(name)        ? NULL                        : StringValueCStr(name)),
-          (int)(NIL_P(type)        ? XML_INTERNAL_GENERAL_ENTITY : NUM2INT(type)),
-          (xmlChar *)(NIL_P(external_id) ? NULL                        : StringValueCStr(external_id)),
-          (xmlChar *)(NIL_P(system_id)   ? NULL                        : StringValueCStr(system_id)),
-          (xmlChar *)(NIL_P(content)     ? NULL                        : StringValueCStr(content))
-        );
+  libxmlStructuredErrorHandlerState handler_state;
+  VALUE rb_errors = rb_ary_new();
+  noko__structured_error_func_save_and_set(&handler_state, (void *)rb_errors, noko__error_array_pusher);
 
-  if (NULL == ptr) {
-    xmlErrorPtr error = xmlGetLastError();
-    if (error) {
-      rb_exc_raise(Nokogiri_wrap_xml_syntax_error(error));
+  xmlEntityPtr c_entity = xmlAddDocEntity(
+                            c_document,
+                            (xmlChar *)(NIL_P(rb_name) ? NULL : StringValueCStr(rb_name)),
+                            (int)(NIL_P(rb_type) ? XML_INTERNAL_GENERAL_ENTITY : NUM2INT(rb_type)),
+                            (xmlChar *)(NIL_P(rb_ext_id) ? NULL : StringValueCStr(rb_ext_id)),
+                            (xmlChar *)(NIL_P(rb_sys_id) ? NULL : StringValueCStr(rb_sys_id)),
+                            (xmlChar *)(NIL_P(rb_content) ? NULL : StringValueCStr(rb_content))
+                          );
+
+  noko__structured_error_func_restore(&handler_state);
+
+  if (NULL == c_entity) {
+    VALUE exception = rb_funcall(cNokogiriXmlSyntaxError, rb_intern("aggregate"), 1, rb_errors);
+    if (RB_TEST(exception)) {
+      rb_exc_raise(exception);
     } else {
       rb_raise(rb_eRuntimeError, "Could not create entity");
     }
-
-    return Qnil;
   }
 
-  return noko_xml_node_wrap(cNokogiriXmlEntityDecl, (xmlNodePtr)ptr);
+  return noko_xml_node_wrap(cNokogiriXmlEntityDecl, (xmlNodePtr)c_entity);
 }
 
 static int
@@ -651,24 +668,16 @@ VALUE
 noko_xml_document_wrap_with_init_args(VALUE klass, xmlDocPtr c_document, int argc, VALUE *argv)
 {
   VALUE rb_document;
-  nokogiriTuplePtr tuple;
 
   if (!klass) {
     klass = cNokogiriXmlDocument;
   }
 
-  rb_document = TypedData_Wrap_Struct(klass, &noko_xml_document_data_type, c_document);
-
-  tuple = (nokogiriTuplePtr)ruby_xmalloc(sizeof(nokogiriTuple));
-  tuple->doc = rb_document;
-  tuple->unlinkedNodes = st_init_numtable_with_size(128);
-  tuple->node_cache = rb_ary_new();
-
-  c_document->_private = tuple ;
+  rb_document = _xml_document_alloc(klass);
+  _xml_document_data_ptr_set(rb_document, c_document);
 
   rb_iv_set(rb_document, "@decorators", Qnil);
   rb_iv_set(rb_document, "@errors", Qnil);
-  rb_iv_set(rb_document, "@node_cache", tuple->node_cache);
 
   rb_obj_call_init(rb_document, argc, argv);
 
@@ -694,7 +703,7 @@ xmlDocPtr
 noko_xml_document_unwrap(VALUE rb_document)
 {
   xmlDocPtr c_document;
-  TypedData_Get_Struct(rb_document, xmlDoc, &noko_xml_document_data_type, c_document);
+  TypedData_Get_Struct(rb_document, xmlDoc, &xml_doc_type, c_document);
   return c_document;
 }
 
@@ -751,13 +760,13 @@ void
 noko_init_xml_document(void)
 {
   assert(cNokogiriXmlNode);
-  /*
-   * Nokogiri::XML::Document wraps an xml document.
-   */
+
   cNokogiriXmlDocument = rb_define_class_under(mNokogiriXml, "Document", cNokogiriXmlNode);
 
-  rb_define_singleton_method(cNokogiriXmlDocument, "read_memory", read_memory, 4);
-  rb_define_singleton_method(cNokogiriXmlDocument, "read_io", read_io, 4);
+  rb_define_alloc_func(cNokogiriXmlDocument, _xml_document_alloc);
+
+  rb_define_singleton_method(cNokogiriXmlDocument, "read_memory", noko_xml_document_s_read_memory, 4);
+  rb_define_singleton_method(cNokogiriXmlDocument, "read_io", noko_xml_document_s_read_io, 4);
   rb_define_singleton_method(cNokogiriXmlDocument, "new", new, -1);
 
   rb_define_method(cNokogiriXmlDocument, "root", rb_xml_document_root, 0);
@@ -766,8 +775,10 @@ noko_init_xml_document(void)
   rb_define_method(cNokogiriXmlDocument, "encoding=", set_encoding, 1);
   rb_define_method(cNokogiriXmlDocument, "version", version, 0);
   rb_define_method(cNokogiriXmlDocument, "canonicalize", rb_xml_document_canonicalize, -1);
-  rb_define_method(cNokogiriXmlDocument, "dup", duplicate_document, -1);
   rb_define_method(cNokogiriXmlDocument, "url", url, 0);
-  rb_define_method(cNokogiriXmlDocument, "create_entity", create_entity, -1);
+  rb_define_method(cNokogiriXmlDocument, "create_entity", noko_xml_document__create_entity, -1);
   rb_define_method(cNokogiriXmlDocument, "remove_namespaces!", remove_namespaces_bang, 0);
+
+  rb_define_protected_method(cNokogiriXmlDocument, "initialize_copy_with_args", rb_xml_document_initialize_copy_with_args,
+                             2);
 }

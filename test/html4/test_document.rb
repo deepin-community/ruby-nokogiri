@@ -65,6 +65,12 @@ module Nokogiri
           assert_equal("http://foobar.example.com/", doc.url)
         end
 
+        def test_document_parse_method_with_url_kwarg
+          doc = Nokogiri::HTML4("<html></html>", url: "http://foobar.example.com/", encoding: "UTF-8")
+          refute_empty(doc.to_s, "Document should not be empty")
+          assert_equal("http://foobar.example.com/", doc.url)
+        end
+
         ###
         # Nokogiri::HTML4 returns an empty Document when given a blank string GH#11
         def test_empty_string_returns_empty_doc
@@ -74,14 +80,12 @@ module Nokogiri
         end
 
         def test_to_xhtml_with_indent
-          skip if Nokogiri.uses_libxml?("~> 2.6.0")
           doc = Nokogiri::HTML4("<html><body><a>foo</a></body></html>")
           doc = Nokogiri::HTML4(doc.to_xhtml(indent: 2))
           assert_indent(2, doc)
         end
 
         def test_write_to_xhtml_with_indent
-          skip if Nokogiri.uses_libxml?("~> 2.6.0")
           io = StringIO.new
           doc = Nokogiri::HTML4("<html><body><a>foo</a></body></html>")
           doc.write_xhtml_to(io, indent: 5)
@@ -233,7 +237,7 @@ module Nokogiri
 
         def test_meta_encoding_without_head
           encoding = "EUC-JP"
-          html = Nokogiri::HTML4("<html><body>foo</body></html>", nil, encoding)
+          html = Nokogiri::HTML4("<html><body>foo</body></html>", encoding: encoding)
 
           assert_nil(html.meta_encoding)
 
@@ -248,7 +252,7 @@ module Nokogiri
 
         def test_html5_meta_encoding_without_head
           encoding = "EUC-JP"
-          html = Nokogiri::HTML4("<!DOCTYPE html><html><body>foo</body></html>", nil, encoding)
+          html = Nokogiri::HTML4("<!DOCTYPE html><html><body>foo</body></html>", encoding: encoding)
 
           assert_nil(html.meta_encoding)
 
@@ -365,10 +369,8 @@ module Nokogiri
           html = Nokogiri::HTML4(<<~HTML)
             <html>
               <body>
-                <div awesome="asdf>
-                  <p>inside div tag</p>
-                </div>
-                <p>outside div tag</p>
+                <div>
+                </foo>
               </body>
             </html>
           HTML
@@ -626,7 +628,7 @@ module Nokogiri
 
         # issue #1821, #2110
         def test_parse_can_take_pathnames
-          assert(File.size(HTML_FILE) > 4096) # file must be big enough to trip the read callback more than once
+          assert_operator(File.size(HTML_FILE), :>, 4096) # file must be big enough to trip the read callback more than once
 
           doc = Nokogiri::HTML4.parse(Pathname.new(HTML_FILE))
 
@@ -662,14 +664,15 @@ module Nokogiri
 
         def test_capturing_nonparse_errors_during_node_copy_between_docs
           # Errors should be emitted while parsing only, and should not change when moving nodes.
-          doc1 = Nokogiri::HTML4("<html><body><diva id='unique'>one</diva></body></html>")
-          doc2 = Nokogiri::HTML4("<html><body><dive id='unique'>two</dive></body></html>")
+          doc1 = Nokogiri::HTML4("<html><body><div id='unique'>one</foo1></body></html>")
+          doc2 = Nokogiri::HTML4("<html><body><div id='unique'>two</foo2></body></html>")
           node1 = doc1.at_css("#unique")
           node2 = doc2.at_css("#unique")
           original_errors1 = doc1.errors.dup
           original_errors2 = doc2.errors.dup
-          assert(original_errors1.any? { |e| e.to_s.include?("Tag diva invalid") }, "it should complain about the tag name")
-          assert(original_errors2.any? { |e| e.to_s.include?("Tag dive invalid") }, "it should complain about the tag name")
+
+          refute_empty(original_errors1)
+          refute_empty(original_errors2)
 
           node1.add_child(node2)
 
@@ -693,17 +696,6 @@ module Nokogiri
           Nokogiri::XML::Element.new("div", doc).set_attribute("id", "unique-issue-1262")
           Nokogiri::XML::Element.new("div", doc).set_attribute("id", "unique-issue-1262")
           assert_equal(0, doc.errors.length)
-        end
-
-        def test_leaking_dtd_nodes_after_internal_subset_removal
-          # see https://github.com/sparklemotion/nokogiri/issues/1784
-          #
-          # just checking that this doesn't raise a valgrind error. we
-          # don't otherwise have any test coverage for removing DTDs.
-          #
-          100.times do |_i|
-            Nokogiri::HTML4::Document.new.internal_subset.remove
-          end
         end
 
         it "skips encoding for script tags" do
@@ -736,7 +728,7 @@ module Nokogiri
           html_fragment = <<~HTML
             <img width="16" height="16" src="images/icon.gif" border="0" alt="Inactive hide details for &quot;User&quot; ---19/05/2015 12:55:29---Provvediamo subito nell&#8217;integrare">
           HTML
-          doc = Nokogiri::HTML4(html_fragment, nil, "ISO-8859-1")
+          doc = Nokogiri::HTML4(html_fragment, encoding: "ISO-8859-1")
           html = doc.to_html
           assert html.index("src=\"images/icon.gif\"")
           assert_equal "ISO-8859-1", html.encoding.name
@@ -747,6 +739,8 @@ module Nokogiri
           doc = Nokogiri::HTML4::Document.parse(html)
           expected = if Nokogiri.jruby?
             [Nokogiri::XML::Node::COMMENT_NODE, Nokogiri::XML::Node::PI_NODE]
+          elsif Nokogiri.uses_libxml?(">= 2.14.0")
+            [Nokogiri::XML::Node::COMMENT_NODE, Nokogiri::XML::Node::COMMENT_NODE]
           elsif Nokogiri.uses_libxml?(">= 2.10.0")
             [Nokogiri::XML::Node::COMMENT_NODE]
           else
@@ -815,7 +809,7 @@ module Nokogiri
           end
 
           describe "read memory" do
-            let(:input) { "<html><body><div" }
+            let(:input) { "<html><body><div></foo>" }
 
             describe "strict parsing" do
               let(:parse_options) { html_strict }
@@ -825,6 +819,15 @@ module Nokogiri
                   Nokogiri::HTML4.parse(input, nil, nil, parse_options)
                 end
                 assert_match(/Parser without recover option encountered error or warning/, exception.to_s)
+                assert_nil(exception.path)
+              end
+
+              it "raises exception on parse error using kwarg" do
+                exception = assert_raises(Nokogiri::SyntaxError) do
+                  Nokogiri::HTML4.parse(input, options: parse_options)
+                end
+                assert_match(/Parser without recover option encountered error or warning/, exception.to_s)
+                assert_nil(exception.path)
               end
             end
 
@@ -837,7 +840,7 @@ module Nokogiri
           end
 
           describe "read io" do
-            let(:input) { StringIO.new("<html><body><div") }
+            let(:input) { StringIO.new("<html><body><div></foo>") }
 
             describe "strict parsing" do
               let(:parse_options) { html_strict }
@@ -847,12 +850,26 @@ module Nokogiri
                   Nokogiri::HTML4.parse(input, nil, "UTF-8", parse_options)
                 end
                 assert_match(/Parser without recover option encountered error or warning/, exception.to_s)
+                assert_nil(exception.path)
+              end
+
+              it "raises exception on parse error using kwargs" do
+                exception = assert_raises(Nokogiri::SyntaxError) do
+                  Nokogiri::HTML4.parse(input, encoding: "UTF-8", options: parse_options)
+                end
+                assert_match(/Parser without recover option encountered error or warning/, exception.to_s)
+                assert_nil(exception.path)
               end
             end
 
             describe "default options" do
               it "does not raise exception on parse error" do
                 doc = Nokogiri::HTML4.parse(input, nil, "UTF-8")
+                assert_operator(doc.errors.length, :>, 0)
+              end
+
+              it "does not raise exception on parse error using kwarg" do
+                doc = Nokogiri::HTML4.parse(input, encoding: "UTF-8")
                 assert_operator(doc.errors.length, :>, 0)
               end
             end

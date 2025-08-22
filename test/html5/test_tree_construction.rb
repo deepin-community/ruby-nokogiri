@@ -70,6 +70,11 @@ class TestHtml5TreeConstructionBase < Nokogiri::TestCase
   end
 
   def run_test
+    options = {
+      max_errors: -1,
+      parse_noscript_content_as_text: @test_script_on,
+    }
+
     if @test[:context]
       # this is a fragment test
       if @test_context_node
@@ -85,15 +90,15 @@ class TestHtml5TreeConstructionBase < Nokogiri::TestCase
           doc = Nokogiri::HTML5::Document.new
           context_node = doc.create_element(@test[:context].first)
         end
-        doc = Nokogiri::HTML5::DocumentFragment.new(doc, @test[:data], context_node, max_errors: @test[:errors].length + 10)
+        doc = Nokogiri::HTML5::DocumentFragment.new(doc, @test[:data], context_node, **options)
       else
         # run the test using a tag name
         ctx = @test[:context].join(":")
         doc = Nokogiri::HTML5::Document.new
-        doc = Nokogiri::HTML5::DocumentFragment.new(doc, @test[:data], ctx, max_errors: @test[:errors].length + 10)
+        doc = Nokogiri::HTML5::DocumentFragment.new(doc, @test[:data], ctx, **options)
       end
     else
-      doc = Nokogiri::HTML5.parse(@test[:data], max_errors: @test[:errors].length + 10)
+      doc = Nokogiri::HTML5.parse(@test[:data], **options)
     end
     # Walk the tree.
     exp_nodes = [@test[:document]]
@@ -323,21 +328,47 @@ module Html5libTestCaseParser
 
       klass = Class.new(TestHtml5TreeConstructionBase) do
         tests.each_with_index do |test, index|
-          next if test[:script] == :on
-
-          define_method "test_#{index}" do
-            @test = test
-            @index = index
-            @test_context_node = false
-            run_test
+          if test[:script] == :both || test[:script] == :off
+            define_method "test_#{index}__script_off" do
+              @test = test
+              @index = index
+              @test_script_on = false
+              @test_context_node = false
+              run_test
+            end
           end
 
-          define_method "test_#{index}__with_node" do
-            @test = test
-            @index = index
-            @test_context_node = true
-            run_test
-          end if test[:context]
+          if test[:script] == :both || test[:script] == :on
+            define_method "test_#{index}__script_on" do
+              @test = test
+              @index = index
+              @test_script_on = true
+              @test_context_node = false
+              run_test
+            end
+          end
+
+          if test[:context]
+            if test[:script] == :both || test[:script] == :off
+              define_method "test_#{index}__script_off__with_node" do
+                @test = test
+                @index = index
+                @test_script_on = false
+                @test_context_node = true
+                run_test
+              end
+            end
+
+            if test[:script] == :both || test[:script] == :on
+              define_method "test_#{index}__script_on__with_node" do
+                @test = test
+                @index = index
+                @test_script_on = true
+                @test_context_node = true
+                run_test
+              end
+            end
+          end
         end
       end
       Object.const_set(test_name, klass)

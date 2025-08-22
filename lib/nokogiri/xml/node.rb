@@ -127,6 +127,42 @@ module Nokogiri
         # This is intentionally empty, and sets the method signature for subclasses.
       end
 
+      #
+      # :call-seq:
+      #   dup → Nokogiri::XML::Node
+      #   dup(level) → Nokogiri::XML::Node
+      #   dup(level, new_parent_doc) → Nokogiri::XML::Node
+      #
+      # Duplicate this node.
+      #
+      # [Parameters]
+      # - +level+ (optional Integer). 0 is a shallow copy, 1 (the default) is a deep copy.
+      # - +new_parent_doc+ (optional Nokogiri::XML::Document)
+      #   The new node's parent Document. Defaults to the the Document of the current node.
+      # [Returns] The new Nokogiri::XML::Node
+      #
+      def dup(level = 1, new_parent_doc = document)
+        super().initialize_copy_with_args(self, level, new_parent_doc)
+      end
+
+      #
+      # :call-seq:
+      #   clone → Nokogiri::XML::Node
+      #   clone(level) → Nokogiri::XML::Node
+      #   clone(level, new_parent_doc) → Nokogiri::XML::Node
+      #
+      # Clone this node.
+      #
+      # [Parameters]
+      # - +level+ (optional Integer). 0 is a shallow copy, 1 (the default) is a deep copy.
+      # - +new_parent_doc+
+      #   The new node's parent Document. Defaults to the the Document of the current node.
+      # [Returns] The new Nokogiri::XML::Node
+      #
+      def clone(level = 1, new_parent_doc = document)
+        super().initialize_copy_with_args(self, level, new_parent_doc)
+      end
+
       ###
       # Decorate this node with the decorators set up in this node's Document
       def decorate!
@@ -228,7 +264,7 @@ module Nokogiri
           if new_parent.nil?
             raise "Failed to parse '#{node_or_tags}' in the context of a '#{context_node.name}' element"
           end
-        when XML::Node
+        when Node
           new_parent = node_or_tags.dup
         else
           raise ArgumentError, "Requires a String or Node argument, and cannot accept a #{node_or_tags.class}"
@@ -406,8 +442,48 @@ module Nokogiri
       end
 
       ####
-      # Set the Node's content to a Text node containing +string+. The string gets XML escaped, not
-      # interpreted as markup.
+      # call-seq:
+      #   content=(input)
+      #
+      # Set the content of this node to +input+.
+      #
+      # [Parameters]
+      # - +input+ (String) The new content for this node. Input is considered to be raw content, and
+      #   so will be entity-escaped in the final DOM string.
+      #
+      # [Example]
+      # Note how entities are handled:
+      #
+      #   doc = Nokogiri::HTML::Document.parse(<<~HTML)
+      #     <html>
+      #       <body>
+      #         <div id="first">asdf</div>
+      #         <div id="second">asdf</div>
+      #   HTML
+      #
+      #   text_node = doc.at_css("div#first").children.first
+      #   div_node = doc.at_css("div#second")
+      #
+      #   value = "You &amp; Me"
+      #
+      #   text_node.content = value
+      #   div_node.content = value
+      #
+      #   doc.css("div").to_html
+      #   # => "<div id=\"first\">You &amp;amp; Me</div>
+      #   #     <div id=\"second\">You &amp;amp; Me</div>"
+      #
+      # For content that is already entity-escaped, use CGI::unescapeHTML to decode it:
+      #
+      #   text_node.content = CGI::unescapeHTML(value)
+      #   div_node.content = CGI::unescapeHTML(value)
+      #
+      #   doc.css("div").to_html
+      #   # => "<div id=\"first\">You &amp; Me</div>
+      #   #     <div id=\"second\">You &amp; Me</div>"
+      #
+      # See also: #native_content=
+      #
       def content=(string)
         self.native_content = encode_special_chars(string.to_s)
       end
@@ -474,7 +550,6 @@ module Nokogiri
       alias_method :to_str, :content
       alias_method :name, :node_name
       alias_method :type, :node_type
-      alias_method :clone, :dup
       alias_method :elements, :element_children
 
       # :section: Working With Node Attributes
@@ -1049,31 +1124,40 @@ module Nokogiri
 
         return Nokogiri::XML::NodeSet.new(document) if contents.empty?
 
-        # libxml2 does not obey the +recover+ option after encountering errors during +in_context+
-        # parsing, and so this horrible hack is here to try to emulate recovery behavior.
-        #
-        # Unfortunately, this means we're no longer parsing "in context" and so namespaces that
-        # would have been inherited from the context node won't be handled correctly. This hack was
-        # written in 2010, and I regret it, because it's silently degrading functionality in a way
-        # that's not easily prevented (or even detected).
-        #
-        # I think preferable behavior would be to either:
-        #
-        # a. add an error noting that we "fell back" and pointing the user to turning off the +recover+ option
-        # b. don't recover, but raise a sensible exception
-        #
-        # For context and background: https://github.com/sparklemotion/nokogiri/issues/313
-        # FIXME bug report: https://github.com/sparklemotion/nokogiri/issues/2092
         error_count = document.errors.length
         node_set = in_context(contents, options.to_i)
-        if node_set.empty? && (document.errors.length > error_count)
-          if options.recover?
+
+        if document.errors.length > error_count
+          raise document.errors[error_count] unless options.recover?
+
+          # TODO: remove this block when libxml2 < 2.13 is no longer supported
+          if node_set.empty?
+            # libxml2 < 2.13 does not obey the +recover+ option after encountering errors during
+            # +in_context+ parsing, and so this horrible hack is here to try to emulate recovery
+            # behavior.
+            #
+            # (Note that HTML4 fragment parsing seems to have been fixed in abd74186, and XML
+            # fragment parsing is fixed in 1c106edf. Both are in 2.13.)
+            #
+            # Unfortunately, this means we're no longer parsing "in context" and so namespaces that
+            # would have been inherited from the context node won't be handled correctly. This hack
+            # was written in 2010, and I regret it, because it's silently degrading functionality in
+            # a way that's not easily prevented (or even detected).
+            #
+            # I think preferable behavior would be to either:
+            #
+            # a. add an error noting that we "fell back" and pointing the user to turning off the
+            #    +recover+ option
+            # b. don't recover, but raise a sensible exception
+            #
+            # For context and background:
+            # - https://github.com/sparklemotion/nokogiri/issues/313
+            # - https://github.com/sparklemotion/nokogiri/issues/2092
             fragment = document.related_class("DocumentFragment").parse(contents)
             node_set = fragment.children
-          else
-            raise document.errors[error_count]
           end
         end
+
         node_set
       end
 
@@ -1165,7 +1249,7 @@ module Nokogiri
       # Fetch the Nokogiri::HTML4::ElementDescription for this node.  Returns
       # nil on XML documents and on unknown tags.
       def description
-        return nil if document.xml?
+        return if document.xml?
 
         Nokogiri::HTML4::ElementDescription[name]
       end
@@ -1254,8 +1338,8 @@ module Nokogiri
       # Compare two Node objects with respect to their Document.  Nodes from
       # different documents cannot be compared.
       def <=>(other)
-        return nil unless other.is_a?(Nokogiri::XML::Node)
-        return nil unless document == other.document
+        return unless other.is_a?(Nokogiri::XML::Node)
+        return unless document == other.document
 
         compare(other)
       end
@@ -1278,6 +1362,7 @@ module Nokogiri
       #   end
       #
       def serialize(*args, &block)
+        # TODO: deprecate non-hash options, see 46c68ed 2009-06-20 for context
         options = if args.first.is_a?(Hash)
           args.shift
         else
@@ -1429,8 +1514,6 @@ module Nokogiri
       #  - +content+ → (String) The contents of all the text nodes in this node's subtree. See #content.
       #  - +inner_html+ → (String) The inner markup for the children of this node. See #inner_html.
       #
-      #  ⚡ This is an experimental feature, available since v1.14.0
-      #
       #  *Example*
       #
       #    doc = Nokogiri::XML.parse(<<~XML)
@@ -1464,6 +1547,8 @@ module Nokogiri
       #    #           }),
       #    #         value = "def"
       #    #         })]}
+      #
+      #  Since v1.14.0
       #
       def deconstruct_keys(keys)
         requested_keys = DECONSTRUCT_KEYS & keys
@@ -1535,19 +1620,12 @@ module Nokogiri
         node_or_tags
       end
 
-      USING_LIBXML_WITH_BROKEN_SERIALIZATION = Nokogiri.uses_libxml?("~> 2.6.0").freeze
-      private_constant :USING_LIBXML_WITH_BROKEN_SERIALIZATION
-
       def to_format(save_option, options)
-        return dump_html if USING_LIBXML_WITH_BROKEN_SERIALIZATION
-
         options[:save_with] = save_option unless options[:save_with]
         serialize(options)
       end
 
       def write_format_to(save_option, io, options)
-        return (io << dump_html) if USING_LIBXML_WITH_BROKEN_SERIALIZATION
-
         options[:save_with] ||= save_option
         write_to(io, options)
       end

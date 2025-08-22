@@ -56,16 +56,27 @@
 
 #include <libexslt/exslt.h>
 
-/* libxml2_backwards_compat.c */
-#ifndef HAVE_XMLFIRSTELEMENTCHILD
-xmlNodePtr xmlFirstElementChild(xmlNodePtr parent);
-xmlNodePtr xmlNextElementSibling(xmlNodePtr node);
-xmlNodePtr xmlLastElementChild(xmlNodePtr parent);
+/* libxml2_polyfill.c */
+#ifndef HAVE_XMLCTXTSETOPTIONS
+int xmlCtxtSetOptions(xmlParserCtxtPtr ctxt, int options);
+#endif
+#ifndef HAVE_XMLCTXTGETOPTIONS
+int xmlCtxtGetOptions(xmlParserCtxtPtr ctxt);
+#endif
+#ifndef HAVE_XMLSWITCHENCODINGNAME
+int xmlSwitchEncodingName(xmlParserCtxtPtr ctxt, const char *encoding);
 #endif
 
 #define XMLNS_PREFIX "xmlns"
 #define XMLNS_PREFIX_LEN 6 /* including either colon or \0 */
 
+#ifndef xmlErrorConstPtr
+#  if LIBXML_VERSION >= 21200
+#    define xmlErrorConstPtr const xmlError *
+#  else
+#    define xmlErrorConstPtr xmlError *
+#  endif
+#endif
 
 #include <ruby.h>
 #include <ruby/st.h>
@@ -141,6 +152,7 @@ NOKOPUBVAR VALUE cNokogiriXsltStylesheet ;
 NOKOPUBVAR VALUE cNokogiriHtml4Document ;
 NOKOPUBVAR VALUE cNokogiriHtml4SaxPushParser ;
 NOKOPUBVAR VALUE cNokogiriHtml4ElementDescription ;
+NOKOPUBVAR VALUE cNokogiriHtml4SaxParser;
 NOKOPUBVAR VALUE cNokogiriHtml4SaxParserContext;
 NOKOPUBVAR VALUE cNokogiriHtml5Document ;
 
@@ -150,12 +162,6 @@ typedef struct _nokogiriTuple {
   VALUE         node_cache;
 } nokogiriTuple;
 typedef nokogiriTuple *nokogiriTuplePtr;
-
-typedef struct _nokogiriSAXTuple {
-  xmlParserCtxtPtr  ctxt;
-  VALUE             self;
-} nokogiriSAXTuple;
-typedef nokogiriSAXTuple *nokogiriSAXTuplePtr;
 
 typedef struct _libxmlStructuredErrorHandlerState {
   void *user_data;
@@ -196,23 +202,19 @@ xmlDocPtr noko_xml_document_unwrap(VALUE rb_document);
 NOKOPUBFUN VALUE Nokogiri_wrap_xml_document(VALUE klass,
     xmlDocPtr doc); /* deprecated. use noko_xml_document_wrap() instead. */
 
-xmlSAXHandlerPtr noko_sax_handler_unwrap(VALUE rb_sax_handler);
+xmlSAXHandlerPtr noko_xml_sax_parser_unwrap(VALUE rb_sax_handler);
 
 xmlParserCtxtPtr noko_xml_sax_push_parser_unwrap(VALUE rb_parser);
 
 VALUE noko_xml_sax_parser_context_wrap(VALUE klass, xmlParserCtxtPtr c_context);
 xmlParserCtxtPtr noko_xml_sax_parser_context_unwrap(VALUE rb_context);
+void noko_xml_sax_parser_context_set_encoding(xmlParserCtxtPtr c_context, VALUE rb_encoding);
 
 #define DOC_RUBY_OBJECT_TEST(x) ((nokogiriTuplePtr)(x->_private))
 #define DOC_RUBY_OBJECT(x) (((nokogiriTuplePtr)(x->_private))->doc)
 #define DOC_UNLINKED_NODE_HASH(x) (((nokogiriTuplePtr)(x->_private))->unlinkedNodes)
 #define DOC_NODE_CACHE(x) (((nokogiriTuplePtr)(x->_private))->node_cache)
 #define NOKOGIRI_NAMESPACE_EH(node) ((node)->type == XML_NAMESPACE_DECL)
-
-#define NOKOGIRI_SAX_SELF(_ctxt) ((nokogiriSAXTuplePtr)(_ctxt))->self
-#define NOKOGIRI_SAX_CTXT(_ctxt) ((nokogiriSAXTuplePtr)(_ctxt))->ctxt
-#define NOKOGIRI_SAX_TUPLE_NEW(_ctxt, _self) nokogiri_sax_tuple_new(_ctxt, _self)
-#define NOKOGIRI_SAX_TUPLE_DESTROY(_tuple) ruby_xfree(_tuple)
 
 #define DISCARD_CONST_QUAL(t, v) ((t)(uintptr_t)(v))
 #define DISCARD_CONST_QUAL_XMLCHAR(v) DISCARD_CONST_QUAL(xmlChar *, v)
@@ -223,24 +225,14 @@ xmlParserCtxtPtr noko_xml_sax_parser_context_unwrap(VALUE rb_context);
 #  define NOKO_WARN_DEPRECATION(message...) rb_warning(message)
 #endif
 
-void Nokogiri_structured_error_func_save(libxmlStructuredErrorHandlerState *handler_state);
-void Nokogiri_structured_error_func_save_and_set(libxmlStructuredErrorHandlerState *handler_state, void *user_data,
+void noko__structured_error_func_save(libxmlStructuredErrorHandlerState *handler_state);
+void noko__structured_error_func_save_and_set(libxmlStructuredErrorHandlerState *handler_state, void *user_data,
     xmlStructuredErrorFunc handler);
-void Nokogiri_structured_error_func_restore(libxmlStructuredErrorHandlerState *handler_state);
-VALUE Nokogiri_wrap_xml_syntax_error(xmlErrorPtr error);
-void Nokogiri_error_array_pusher(void *ctx, xmlErrorPtr error);
-NORETURN_DECL void Nokogiri_error_raise(void *ctx, xmlErrorPtr error);
+void noko__structured_error_func_restore(libxmlStructuredErrorHandlerState *handler_state);
+VALUE noko_xml_syntax_error__wrap(xmlErrorConstPtr error);
+void noko__error_array_pusher(void *ctx, xmlErrorConstPtr error);
+NORETURN_DECL void noko__error_raise(void *ctx, xmlErrorConstPtr error);
 void Nokogiri_marshal_xpath_funcall_and_return_values(xmlXPathParserContextPtr ctx, int nargs, VALUE handler,
     const char *function_name) ;
-
-static inline
-nokogiriSAXTuplePtr
-nokogiri_sax_tuple_new(xmlParserCtxtPtr ctxt, VALUE self)
-{
-  nokogiriSAXTuplePtr tuple = ruby_xmalloc(sizeof(nokogiriSAXTuple));
-  tuple->self = self;
-  tuple->ctxt = ctxt;
-  return tuple;
-}
 
 #endif /* NOKOGIRI_NATIVE */

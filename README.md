@@ -55,6 +55,7 @@ There are a few ways to ask exploratory questions:
 
 - The Nokogiri mailing list is active at https://groups.google.com/group/nokogiri-talk
 - Open an issue using the "Help Request" template at https://github.com/sparklemotion/nokogiri/issues
+- Open a discussion at https://github.com/sparklemotion/nokogiri/discussions
 
 Please do not mail the maintainers at their personal addresses.
 
@@ -90,6 +91,8 @@ We bump `Major.Minor.Patch` versions following this guidance:
 - Updating packaged libraries for non-security-related reasons.
 - Dropping support for EOLed Ruby versions. [Some folks find this objectionable](https://github.com/sparklemotion/nokogiri/issues/1568), but [SemVer says this is OK if the public API hasn't changed](https://semver.org/#what-should-i-do-if-i-update-my-own-dependencies-without-changing-the-public-api).
 - Backwards-incompatible changes to internal or private methods and constants. These are detailed in the "Changes" section of each changelog entry.
+- Removal of deprecated methods or parameters, after a generous transition period; usually when those methods or parameters are rarely-used or dangerous to the user. Essentially, removals that do not justify a major version bump.
+
 
 `Patch`:
 
@@ -111,8 +114,12 @@ You can help sponsor the maintainers of this software through one of these organ
 
 Requirements:
 
-- Ruby >= 2.7
+- Ruby >= 3.1
 - JRuby >= 9.4.0.0
+
+If you are compiling the native extension against a system version of libxml2:
+
+- libxml2 >= 2.9.2 (recommended >= 2.12.0)
 
 
 ### Native Gems: Faster, more reliable installation
@@ -124,11 +131,10 @@ Requirements:
 Nokogiri ships pre-compiled, "native" gems for the following platforms:
 
 - Linux:
-  - `x86-linux` and `x86_64-linux` (req: `glibc >= 2.17`)
-  - `aarch64-linux` and `arm-linux` (req: `glibc >= 2.29`)
-  - Note that musl platforms like Alpine **are** supported
+  - `x86_64-linux-gnu`, `aarch64-linux-gnu`, and `arm-linux-gnu` (req: `glibc >= 2.29`)
+  - `x86_64-linux-musl`, `aarch64-linux-musl`, and `arm-linux-musl`
 - Darwin/MacOS: `x86_64-darwin` and `arm64-darwin`
-- Windows: `x86-mingw32`, `x64-mingw32`, and `x64-mingw-ucrt`
+- Windows: `x64-mingw-ucrt`
 - Java: any platform running JRuby 9.4 or higher
 
 To determine whether your system supports one of these gems, look at the output of `bundle platform` or `ruby -e 'puts Gem::Platform.local.to_s'`.

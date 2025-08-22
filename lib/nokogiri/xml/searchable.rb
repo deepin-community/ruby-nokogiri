@@ -199,7 +199,7 @@ module Nokogiri
       #
       # Search this node's immediate children using CSS selector +selector+
       def >(selector) # rubocop:disable Naming/BinaryOperatorParameterName
-        ns = (document.root&.namespaces || {})
+        ns = document.root&.namespaces || {}
         xpath(CSS.xpath_for(selector, prefix: "./", ns: ns).first)
       end
 
@@ -207,8 +207,42 @@ module Nokogiri
 
       private
 
+      def extract_params(params) # :nodoc:
+        handler = params.find do |param|
+          ![Hash, String, Symbol].include?(param.class)
+        end
+        params -= [handler] if handler
+
+        hashes = []
+        while Hash === params.last || params.last.nil?
+          hashes << params.pop
+          break if params.empty?
+        end
+        ns, binds = hashes.reverse
+
+        ns ||= document.root&.namespaces || {}
+
+        [params, handler, ns, binds]
+      end
+
       def css_internal(node, rules, handler, ns)
         xpath_internal(node, css_rules_to_xpath(rules, ns), handler, ns, nil)
+      end
+
+      def css_rules_to_xpath(rules, ns)
+        rules.map { |rule| xpath_query_from_css_rule(rule, ns) }
+      end
+
+      def xpath_query_from_css_rule(rule, ns)
+        self.class::IMPLIED_XPATH_CONTEXTS.map do |implied_xpath_context|
+          visitor = Nokogiri::CSS::XPathVisitor.new(
+            builtins: Nokogiri::CSS::XPathVisitor::BuiltinsConfig::OPTIMAL,
+            doctype: document.xpath_doctype,
+            prefix: implied_xpath_context,
+            namespaces: ns,
+          )
+          CSS.xpath_for(rule.to_s, visitor: visitor)
+        end.join(" | ")
       end
 
       def xpath_internal(node, paths, handler, ns, binds)
@@ -227,51 +261,13 @@ module Nokogiri
       end
 
       def xpath_impl(node, path, handler, ns, binds)
-        ctx = XPathContext.new(node)
-        ctx.register_namespaces(ns)
-        path = path.gsub(/xmlns:/, " :") unless Nokogiri.uses_libxml?
+        context = XPathContext.new(node)
+        context.register_namespaces(ns)
+        context.register_variables(binds)
 
-        binds&.each do |key, value|
-          ctx.register_variable(key.to_s, value)
-        end
+        path = path.gsub("xmlns:", " :") unless Nokogiri.uses_libxml?
 
-        ctx.evaluate(path, handler)
-      end
-
-      def css_rules_to_xpath(rules, ns)
-        rules.map { |rule| xpath_query_from_css_rule(rule, ns) }
-      end
-
-      def xpath_query_from_css_rule(rule, ns)
-        visitor = Nokogiri::CSS::XPathVisitor.new(
-          builtins: Nokogiri::CSS::XPathVisitor::BuiltinsConfig::OPTIMAL,
-          doctype: document.xpath_doctype,
-        )
-        self.class::IMPLIED_XPATH_CONTEXTS.map do |implied_xpath_context|
-          CSS.xpath_for(rule.to_s, {
-            prefix: implied_xpath_context,
-            ns: ns,
-            visitor: visitor,
-          })
-        end.join(" | ")
-      end
-
-      def extract_params(params) # :nodoc:
-        handler = params.find do |param|
-          ![Hash, String, Symbol].include?(param.class)
-        end
-        params -= [handler] if handler
-
-        hashes = []
-        while Hash === params.last || params.last.nil?
-          hashes << params.pop
-          break if params.empty?
-        end
-        ns, binds = hashes.reverse
-
-        ns ||= (document.root&.namespaces || {})
-
-        [params, handler, ns, binds]
+        context.evaluate(path, handler)
       end
     end
   end

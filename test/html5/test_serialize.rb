@@ -198,7 +198,7 @@ class TestHtml5Serialize < Nokogiri::TestCase
   # https://github.com/web-platform-tests/wpt/blob/master/html/syntax/serializing-html-fragments/serializing.html
   def serializing_test_data
     @serializing_test_data ||= begin
-      html = <<~EOF.gsub(/        /, "")
+      html = <<~EOF.gsub("        ", "")
         <!DOCTYPE html>
         <div id="test" style="display:none">
         <span></span>
@@ -552,5 +552,21 @@ class TestHtml5Serialize < Nokogiri::TestCase
     fragment = Nokogiri::HTML5.fragment("<div>hello</div>goodbye")
     refute(fragment.send(:prepend_newline?))
     assert_equal("<div>hello</div>goodbye", fragment.to_html)
+  end
+
+  describe "foreign content style tag serialization is escaped" do
+    it "with svg parent" do
+      input = %{<svg><style>&lt;img src>}
+      expected = %{<svg><style>&lt;img src&gt;</style></svg>}
+
+      assert_equal(expected, Nokogiri::HTML5.fragment(input).to_html)
+    end
+
+    it "with math parent" do
+      input = %{<math><style>&lt;img src>}
+      expected = %{<math><style>&lt;img src&gt;</style></math>}
+
+      assert_equal(expected, Nokogiri::HTML5.fragment(input).to_html)
+    end
   end
 end if Nokogiri.uses_gumbo?

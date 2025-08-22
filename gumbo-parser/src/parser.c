@@ -56,6 +56,7 @@ const GumboOptions kGumboDefaultOptions = {
   .fragment_encoding = NULL,
   .quirks_mode = GUMBO_DOCTYPE_NO_QUIRKS,
   .fragment_context_has_form_ancestor = false,
+  .parse_noscript_content_as_text = false,
 };
 
 #define STRING(s) {.data = s, .length = sizeof(s) - 1}
@@ -317,7 +318,7 @@ static GumboNode* create_node(GumboNodeType type) {
   return node;
 }
 
-static GumboNode* new_document_node() {
+static GumboNode* new_document_node(void) {
   GumboNode* document_node = create_node(GUMBO_NODE_DOCUMENT);
   document_node->parse_flags = GUMBO_INSERTION_BY_PARSER;
   gumbo_vector_init(1, &document_node->v.document.children);
@@ -749,10 +750,20 @@ static void parser_add_parse_error (
   GumboParserError* extra_data = &error->v.parser;
   extra_data->input_type = token->type;
   extra_data->input_tag = GUMBO_TAG_UNKNOWN;
-  if (token->type == GUMBO_TOKEN_START_TAG) {
+  extra_data->input_name = NULL;
+  if (token->type == GUMBO_TOKEN_START_TAG)
+  {
     extra_data->input_tag = token->v.start_tag.tag;
-  } else if (token->type == GUMBO_TOKEN_END_TAG) {
+    if (extra_data->input_tag == GUMBO_TAG_UNKNOWN && token->v.start_tag.name) {
+      extra_data->input_name = gumbo_strdup(token->v.start_tag.name);
+    }
+  }
+  else if (token->type == GUMBO_TOKEN_END_TAG)
+  {
     extra_data->input_tag = token->v.end_tag.tag;
+    if (extra_data->input_tag == GUMBO_TAG_UNKNOWN && token->v.end_tag.name) {
+      extra_data->input_name = gumbo_strdup(token->v.end_tag.name);
+    }
   }
   const GumboParserState* state = parser->_parser_state;
   extra_data->parser_state = state->_insertion_mode;
@@ -763,10 +774,13 @@ static void parser_add_parse_error (
       node->type == GUMBO_NODE_ELEMENT
       || node->type == GUMBO_NODE_TEMPLATE
     );
-    gumbo_vector_add (
-      (void*) node->v.element.tag,
-      &extra_data->tag_stack
-    );
+    void *tag;
+    if (node->v.element.tag == GUMBO_TAG_UNKNOWN && node->v.element.name) {
+      tag = gumbo_strdup(node->v.element.name);
+    } else {
+      tag = (void *)(uintptr_t)node->v.element.tag;
+    }
+    gumbo_vector_add(tag, &extra_data->tag_stack);
   }
 }
 
@@ -1187,7 +1201,7 @@ static GumboNode* insert_element_of_tag_type (
   element->parse_flags |= GUMBO_INSERTION_BY_PARSER | reason;
   insert_element(parser, element, false);
   gumbo_debug (
-    "Inserting %s element (@%p) from tag type.\n",
+    "Inserting <%s> element (@%p) from tag type.\n",
     gumbo_normalized_tagname(tag),
     (void*)element
   );
@@ -1204,6 +1218,11 @@ static GumboNode* insert_foreign_element (
   assert(token->type == GUMBO_TOKEN_START_TAG);
   GumboNode* element = create_element_from_token(token, tag_namespace);
   insert_element(parser, element, false);
+  gumbo_debug (
+    "Inserting <%s> foreign element (@%p).\n",
+    gumbo_normalized_tagname(element->v.element.tag),
+    (void*)element
+  );
   if (
     token_has_attribute(token, "xmlns")
     && !attribute_matches_case_sensitive (
@@ -1978,7 +1997,7 @@ static void adjust_svg_tag(GumboToken* token) {
   assert(token->type == GUMBO_TOKEN_START_TAG);
   if (token->v.start_tag.tag == GUMBO_TAG_FOREIGNOBJECT) {
     assert(token->v.start_tag.name == NULL);
-    token->v.start_tag.name = "foreignObject";
+    token->v.start_tag.name = (char *)"foreignObject";
   } else if (token->v.start_tag.tag == GUMBO_TAG_UNKNOWN) {
     assert(token->v.start_tag.name);
     const StringReplacement *replacement = gumbo_get_svg_tag_replacement(
@@ -2066,6 +2085,7 @@ static void remove_from_parent(GumboNode* node) {
 
 // This is here to clean up memory when the spec says "Ignore current token."
 static void ignore_token(GumboParser* parser) {
+  gumbo_debug("Ignoring token.\n");
   GumboToken* token = parser->_parser_state->_current_token;
   // Ownership of the token's internal buffers are normally transferred to the
   // element, but if no element is emitted (as happens in non-verbatim-mode
@@ -2430,7 +2450,7 @@ static void adoption_agency_algorithm(GumboParser* parser, GumboToken* token)
 
 // https://html.spec.whatwg.org/multipage/parsing.html#the-end
 static void finish_parsing(GumboParser* parser) {
-  gumbo_debug("Finishing parsing");
+  gumbo_debug("Finishing parsing\n");
   maybe_flush_text_node_buffer(parser);
   GumboParserState* state = parser->_parser_state;
   for (
@@ -2608,6 +2628,7 @@ static void handle_in_head(GumboParser* parser, GumboToken* token) {
   }
   if (
     tag_in(token, kStartTag, &(const TagSet){TAG(NOFRAMES), TAG(STYLE)})
+    || (tag_is(token, kStartTag, GUMBO_TAG_NOSCRIPT) && parser->_options->parse_noscript_content_as_text)
   ) {
     run_generic_parsing_algorithm(parser, token, GUMBO_LEX_RAWTEXT);
     return;
@@ -3313,7 +3334,10 @@ static void handle_in_body(GumboParser* parser, GumboToken* token) {
     run_generic_parsing_algorithm(parser, token, GUMBO_LEX_RAWTEXT);
     return;
   }
-  if (tag_is(token, kStartTag, GUMBO_TAG_NOEMBED)) {
+  if (
+    tag_is(token, kStartTag, GUMBO_TAG_NOEMBED)
+    || (tag_is(token, kStartTag, GUMBO_TAG_NOSCRIPT) && parser->_options->parse_noscript_content_as_text)
+  ) {
     run_generic_parsing_algorithm(parser, token, GUMBO_LEX_RAWTEXT);
     return;
   }
@@ -4389,7 +4413,7 @@ static void handle_html_content(GumboParser* parser, GumboToken* token) {
 
 // https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign
 static void handle_in_foreign_content(GumboParser* parser, GumboToken* token) {
-  gumbo_debug("Handling foreign content");
+  gumbo_debug("Handling foreign content.\n");
   switch (token->type) {
     case GUMBO_TOKEN_NULL:
       parser_add_parse_error(parser, token);
@@ -4507,7 +4531,7 @@ static void handle_in_foreign_content(GumboParser* parser, GumboToken* token) {
   if (i == 0)
     return;
   // We can't call handle_token directly because the current node is still in
-  // a foriegn namespace, so it would re-enter this and result in infinite
+  // a foreign namespace, so it would re-enter this and result in infinite
   // recursion.
   handle_html_content(parser, token);
 }
@@ -4627,12 +4651,20 @@ static void fragment_parser_init (
   const char* fragment_encoding = options->fragment_encoding;
   GumboQuirksModeEnum quirks = options->quirks_mode;
   bool ctx_has_form_ancestor = options->fragment_context_has_form_ancestor;
-
   GumboNode* root;
-  // 2.
+
+  // 1. [Create a new Document node, and mark it as being an HTML document.]
+  // 2. [If the node document of the context element is in quirks mode, then
+  //    let the Document be in quirks mode. Otherwise, the node document of
+  //    the context element is in limited-quirks mode, then let the Document
+  //    be in limited-quirks mode. Otherwise, leave the Document in no-quirks
+  //    mode.]
   get_document_node(parser)->v.document.doc_type_quirks_mode = quirks;
 
-  // 3.
+  // 3. [If allowDeclarativeShadowRoots is true, then set the Document's allow
+  //    declarative shadow roots to true.]
+  // 4. [Create a new HTML parser, and associate it with the just created Document node.]
+  // 5. [Set the state of the HTML parser's tokenization stage as follows, switching on the context element:]
   parser->_parser_state->_fragment_ctx =
     create_fragment_ctx_element(fragment_ctx, fragment_namespace, fragment_encoding);
   GumboTag ctx_tag = parser->_parser_state->_fragment_ctx->v.element.tag;
@@ -4659,8 +4691,8 @@ static void fragment_parser_init (
         break;
 
       case GUMBO_TAG_NOSCRIPT:
-        /* scripting is disabled in Gumbo, so leave the tokenizer
-         * in the default data state */
+        if (options->parse_noscript_content_as_text)
+          gumbo_tokenizer_set_state(parser, GUMBO_LEX_RAWTEXT);
         break;
 
       case GUMBO_TAG_PLAINTEXT:
@@ -4762,7 +4794,18 @@ GumboOutput* gumbo_parse_with_options (
         adjusted_current_node &&
           adjusted_current_node->v.element.tag_namespace != GUMBO_NAMESPACE_HTML
       );
-      gumbo_lex(&parser, &token);
+      // If the maximum tree depth has been exceeded, proceed as if EOF has been reached.
+      //
+      // The parser is pretty fragile. Breaking out of the parsing loop in the middle of
+      // the parse can leave the document in an inconsistent state.
+      if (unlikely(state->_open_elements.length > max_tree_depth)) {
+        parser._output->status = GUMBO_STATUS_TREE_TOO_DEEP;
+        gumbo_debug("Tree depth limit exceeded.\n");
+        token.type = GUMBO_TOKEN_EOF;
+      } else {
+        gumbo_lex(&parser, &token);
+      }
+
     }
 
     const char* token_type = "text";
@@ -4786,7 +4829,7 @@ GumboOutput* gumbo_parse_with_options (
         break;
     }
     gumbo_debug (
-      "Handling %s token @%lu:%lu in state %u.\n",
+      "Handling %s token @%lu:%lu in insertion mode %u.\n",
       (char*) token_type,
       (unsigned long)token.position.line,
       (unsigned long)token.position.column,
@@ -4826,14 +4869,12 @@ GumboOutput* gumbo_parse_with_options (
       // to a token.
       if (token.type == GUMBO_TOKEN_END_TAG &&
           token.v.end_tag.tag == GUMBO_TAG_UNKNOWN)
+      {
         gumbo_free(token.v.end_tag.name);
+        token.v.end_tag.name = NULL;
+      }
     }
 
-    if (unlikely(state->_open_elements.length > max_tree_depth)) {
-      parser._output->status = GUMBO_STATUS_TREE_TOO_DEEP;
-      gumbo_debug("Tree depth limit exceeded.\n");
-      break;
-    }
 
     ++loop_count;
     assert(loop_count < 1000000000UL);

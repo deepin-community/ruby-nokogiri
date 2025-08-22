@@ -46,6 +46,7 @@ void noko_init_html_element_description(void);
 void noko_init_html_entity_lookup(void);
 void noko_init_html_sax_parser_context(void);
 void noko_init_html_sax_push_parser(void);
+void noko_init_html4_sax_parser(void);
 void noko_init_gumbo(void);
 void noko_init_test_global_handlers(void);
 
@@ -184,8 +185,8 @@ Init_nokogiri(void)
 {
   mNokogiri         = rb_define_module("Nokogiri");
   mNokogiriGumbo    = rb_define_module_under(mNokogiri, "Gumbo");
-  mNokogiriHtml4     = rb_define_module_under(mNokogiri, "HTML4");
-  mNokogiriHtml4Sax  = rb_define_module_under(mNokogiriHtml4, "SAX");
+  mNokogiriHtml4    = rb_define_module_under(mNokogiri, "HTML4");
+  mNokogiriHtml4Sax = rb_define_module_under(mNokogiriHtml4, "SAX");
   mNokogiriHtml5    = rb_define_module_under(mNokogiri, "HTML5");
   mNokogiriXml      = rb_define_module_under(mNokogiri, "XML");
   mNokogiriXmlSax   = rb_define_module_under(mNokogiriXml, "SAX");
@@ -201,6 +202,9 @@ Init_nokogiri(void)
 
   rb_const_set(mNokogiri, rb_intern("LIBXSLT_COMPILED_VERSION"), NOKOGIRI_STR_NEW2(LIBXSLT_DOTTED_VERSION));
   rb_const_set(mNokogiri, rb_intern("LIBXSLT_LOADED_VERSION"), NOKOGIRI_STR_NEW2(xsltEngineVersion));
+
+  rb_const_set(mNokogiri, rb_intern("LIBXML_ZLIB_ENABLED"),
+               xmlHasFeature(XML_WITH_ZLIB) == 1 ? Qtrue : Qfalse);
 
 #ifdef NOKOGIRI_PACKAGED_LIBRARIES
   rb_const_set(mNokogiri, rb_intern("PACKAGED_LIBRARIES"), Qtrue);
@@ -244,7 +248,10 @@ Init_nokogiri(void)
   noko_init_xml_namespace();
   noko_init_xml_node_set();
   noko_init_xml_reader();
+
   noko_init_xml_sax_parser();
+  noko_init_html4_sax_parser();
+
   noko_init_xml_xpath_context();
   noko_init_xslt_stylesheet();
   noko_init_html_element_description();

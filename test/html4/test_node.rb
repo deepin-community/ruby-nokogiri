@@ -2,8 +2,6 @@
 
 require "helper"
 
-require "nkf"
-
 module Nokogiri
   module HTML
     class TestNode < Nokogiri::TestCase
@@ -170,19 +168,10 @@ module Nokogiri
       end
 
       def test_to_html_does_not_contain_entities
-        return unless defined?(NKF) # NKF is not implemented on Rubinius as of 2009-11-23
-
-        html = NKF.nkf("-e --msdos", <<-EOH)
-        <html><body>
-        <p> test paragraph
-        foo bar </p>
-        </body></html>
-        EOH
+        html = "<html><body>\r\n<p> test paragraph\r\nfoo bar </p>\r\n</body></html>\r\n"
         nokogiri = Nokogiri::HTML4.parse(html)
 
-        if RUBY_PLATFORM.include?("java")
-          # NKF linebreak modes are not supported as of jruby 1.2
-          # see http://jira.codehaus.org/browse/JRUBY-3602 for status
+        if Nokogiri.jruby? || Nokogiri.uses_libxml?(">= 2.14.0")
           assert_equal(
             "<p>testparagraph\nfoobar</p>",
             nokogiri.at("p").to_html.delete(" "),
@@ -201,12 +190,14 @@ module Nokogiri
         table = html.xpath("//table")[1]
         trs = table.xpath("tr").drop(1)
 
-        # the jruby inplementation of drop uses dup() on the IRubyObject (which
-        # is NOT the same dup() method on the ruby Object) which produces a
-        # shallow clone. a shallow of valid XMLNode triggers several
-        # NullPointerException on inspect() since loads of invariants
-        # are not set. the fix for GH1042 ensures a proper working clone.
-        trs.inspect # assert_nothing_raised
+        refute_raises do
+          # the jruby implementation of drop uses dup() on the IRubyObject (which
+          # is NOT the same dup() method on the ruby Object) which produces a
+          # shallow clone. a shallow of valid XMLNode triggers several
+          # NullPointerException on inspect() since loads of invariants
+          # are not set. the fix for GH1042 ensures a proper working clone.
+          trs.inspect
+        end
       end
 
       def test_fragment_node_to_xhtml # see #2355

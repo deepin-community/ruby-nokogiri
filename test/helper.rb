@@ -2,7 +2,6 @@
 
 #
 # Some environment variables that are used to configure the test suite:
-# - NOKOGIRI_TEST_FAIL_FAST: if set to anything, emit test failure messages immediately upon failure
 # - NOKOGIRI_TEST_GC_LEVEL: (roughly in order of stress)
 #   - "normal" - normal GC functionality (default)
 #   - "minor" - force a minor GC cycle after each test
@@ -10,25 +9,10 @@
 #   - "compact" - force a major GC after each test and GC compaction after every 20 tests
 #   - "verify" - force a major GC after each test and verify references-after-compaction after every 20 tests
 #   - "stress" - run tests with GC.stress set to true
-# - NOKOGIRI_GC: read more in test/test_memory_leak.rb
+# - NOKOGIRI_MEMORY_SUITE: read more in test/test_memory_usage.rb
 #
 
-require "simplecov"
-SimpleCov.start do
-  add_filter "/test/"
-  enable_coverage :branch
-end
-
 $VERBOSE = true
-
-require "minitest/autorun"
-require "minitest/benchmark"
-require "minitest/reporters"
-
-nokogiri_minitest_reporters_options = { color: true, slow_count: 10, detailed_skip: false }
-nokogiri_minitest_reporters_options[:fast_fail] = true if ENV["NOKOGIRI_TEST_FAIL_FAST"]
-puts "Minitest::Reporters options: #{nokogiri_minitest_reporters_options}"
-Minitest::Reporters.use!(Minitest::Reporters::DefaultReporter.new(nokogiri_minitest_reporters_options))
 
 require "fileutils"
 require "tempfile"
@@ -53,6 +37,15 @@ end
 
 warn "#{__FILE__}:#{__LINE__}: version info:"
 warn Nokogiri::VERSION_INFO.to_yaml
+warn
+
+require "minitest/autorun"
+require "minitest/benchmark"
+
+if !Nokogiri.jruby? && ENV["NCPU"].to_i > 1
+  require "minitest/parallel_fork"
+  warn "Running parallel tests with NCPU=#{ENV["NCPU"].inspect}"
+end
 
 module Nokogiri
   module TestBase
@@ -78,14 +71,6 @@ module Nokogiri
     XML_ATOM_FILE        = File.join(ASSETS_DIR, "atom.xml")
     XSLT_FILE            = File.join(ASSETS_DIR, "staff.xslt")
     XPATH_FILE           = File.join(ASSETS_DIR, "slow-xpath.xml")
-
-    def i_am_ruby_matching(gem_version_requirement_string)
-      Gem::Requirement.new(gem_version_requirement_string).satisfied_by?(Gem::Version.new(RUBY_VERSION))
-    end
-
-    def i_am_in_a_systemd_container
-      File.exist?("/proc/self/cgroup") && File.read("/proc/self/cgroup") =~ %r(/docker/|/garden/)
-    end
 
     def i_am_running_in_valgrind
       # https://stackoverflow.com/questions/365458/how-can-i-detect-if-a-program-is-running-from-within-valgrind/62364698#62364698
@@ -135,31 +120,38 @@ module Nokogiri
     @@test_count = 0
     @@gc_level = nil
 
+    class << self
+      def nokogiri_test_gc_level
+        level = ENV["NOKOGIRI_TEST_GC_LEVEL"]&.to_sym
+
+        if [:stress, :major, :minor, :normal].include?(level)
+          level
+        elsif (level == :compact) && defined?(GC.compact)
+          :compact
+        elsif (level == :verify) && defined?(GC.verify_compaction_references) &&
+            Gem::Requirement.new(">= 3.3.0").satisfied_by?(Gem::Version.new(RUBY_VERSION))
+          :verify
+        else
+          :normal
+        end
+      end
+    end
+
     def initialize_nokogiri_test_gc_level
       return if Nokogiri.jruby?
       return if @@gc_level
 
-      @@gc_level = if ["stress", "major", "minor", "normal"].include?(ENV["NOKOGIRI_TEST_GC_LEVEL"])
-        ENV["NOKOGIRI_TEST_GC_LEVEL"]
-      elsif (ENV["NOKOGIRI_TEST_GC_LEVEL"] == "compact") && defined?(GC.compact)
-        "compact"
-      elsif (ENV["NOKOGIRI_TEST_GC_LEVEL"] == "verify") && defined?(GC.verify_compaction_references)
-        "verify"
-      else
-        "normal"
-      end
+      @@gc_level = TestCase.nokogiri_test_gc_level
 
-      if ["compact", "verify"].include?(@@gc_level)
-        # the only way of detecting an unsupported platform is actually
-        # trying GC compaction
+      if [:compact, :verify].include?(@@gc_level)
+        # the only way of detecting an unsupported platform is actually trying GC compaction
         begin
           GC.compact
         rescue NotImplementedError
-          @@gc_level = "normal"
-          warn("#{__FILE__}:#{__LINE__}: GC compaction not suppport by platform")
+          @@gc_level = :normal
+          warn("#{__FILE__}:#{__LINE__}: GC compaction not supported by platform")
         end
       end
-      warn("#{__FILE__}:#{__LINE__}: NOKOGIRI_TEST_GC_LEVEL: #{@@gc_level}")
     end
 
     def setup
@@ -174,7 +166,7 @@ module Nokogiri
       end
 
       unless Nokogiri.jruby?
-        if @@gc_level == "stress"
+        if @@gc_level == :stress
           GC.stress = true
         end
       end
@@ -185,35 +177,41 @@ module Nokogiri
     def teardown
       unless Nokogiri.jruby?
         case @@gc_level
-        when "minor"
+        when :minor
           GC.start(full_mark: false)
-        when "major"
+        when :major
           GC.start(full_mark: true)
-        when "compact"
+        when :compact
           if @@test_count % COMPACT_EVERY == 0
             GC.compact
+            putc("<")
           else
             GC.start(full_mark: true)
           end
-        when "verify"
+        when :verify
           if @@test_count % COMPACT_EVERY == 0
-            # https://alanwu.space/post/check-compaction/
             gc_verify_compaction_references
+            putc("!")
           end
           GC.start(full_mark: true)
-        when "stress"
+        when :stress
           GC.stress = false
         end
+      end
+
+      super
+
+      if !skipped? && !error? && assertions.zero?
+        raise(Minitest::Assertion, "Test is missing assertions")
       end
 
       if Nokogiri.uses_libxml?
         refute(@fake_error_handler_called, "the fake error handler should never get called")
       end
-
-      super
     end
 
     def gc_verify_compaction_references
+      # https://alanwu.space/post/check-compaction/
       if Gem::Requirement.new(">= 3.2.0").satisfied_by?(Gem::Version.new(RUBY_VERSION))
         GC.verify_compaction_references(expand_heap: true, toward: :empty)
       else
@@ -239,7 +237,14 @@ module Nokogiri
       raise "memory stress tests shouldn't be run on JRuby" if Nokogiri.jruby?
 
       yield.tap do
-        GC.start(full_mark: true) if @@gc_level == "minor"
+        GC.start(full_mark: true) if @@gc_level == :minor
+        @assertions += 1
+      end
+    end
+
+    def refute_raises
+      yield.tap do
+        @assertions += 1
       end
     end
 
@@ -261,14 +266,6 @@ module Nokogiri
       document.decorate!
     end
 
-    def assert_not_send(send_ary, m = nil)
-      recv, msg, *args = send_ary
-      m = message(m) do
-        "Expected #{mu_pp(recv)}.#{msg}(*#{mu_pp(args)}) to return false"
-      end
-      refute(recv.__send__(msg, *args), m)
-    end unless method_defined?(:assert_not_send)
-
     def pending(msg)
       begin
         yield
@@ -283,18 +280,134 @@ module Nokogiri
 
       pending(msg, &block)
     end
+
+    # returns the page size in bytes
+    # will only work on linux
+    def meminfo_page_size
+      @page_size ||= %x(getconf PAGESIZE).chomp.to_i
+    end
+
+    # returns the vmsize in bytes
+    # will only work on linux
+    def meminfo_vmsize
+      File.read("/proc/self/statm").split(" ")[0].to_i * meminfo_page_size
+    end
+
+    # returns the rss in bytes
+    # will only work on linux
+    def meminfo_rss
+      File.read("/proc/self/statm").split(" ")[1].to_i * meminfo_page_size
+    end
+
+    # see test/test_memory_usage.rb for example usage
+    #
+    # when running under valgrind, this just loops for 1 second, so that valgrind leak check
+    # (ruby_memcheck) can find any leaks.
+    #
+    # otherwise, will loop for 10 seconds, measure vmsize over time, calculate the best-fit linear
+    # slope, and fail if there is definitely a leak.
+    def memwatch(method, n: nil, retry_once: true, &block)
+      if i_am_running_in_valgrind
+        refute_valgrind_errors do
+          t1 = Time.now
+          loop do
+            yield
+            break if Time.new - t1 > 1
+          end
+        end
+
+        return
+      end
+
+      measurements = 10
+      default_run_length = 10 # seconds
+      warmup = 2.0 # seconds
+
+      if n.nil?
+        # calculate n to run for about default_run_length seconds
+        t1 = Time.now
+        n = 0
+        loop do
+          n += 1
+
+          yield
+
+          break if (Time.now - t1) > warmup
+        end
+        n = (n * (default_run_length / warmup)).ceil(-3)
+      end
+      data_point_every = n / measurements
+
+      puts
+
+      memsizes = []
+      iterations = []
+
+      t1 = Time.now
+      (n + 1).times do |j| # plus one to print out the final iteration
+        if j % data_point_every == 0
+          GC.start(full_mark: true)
+          memsize = meminfo_vmsize
+
+          printf("memwatch: %s: (n=%-2d %7d) %d Kb", method, memsizes.length + 1, j, memsize / 1024)
+          unless memsizes.empty?
+            delta = memsize - memsizes.last
+            printf(", Δ %+d", delta / 1024)
+          end
+          print("\n")
+
+          iterations << j
+          memsizes << memsize.to_f # so fit_linear gives us floats
+        end
+
+        yield
+      end
+      printf("memwatch: %s: elapsed %fs\n", method, Time.now - t1)
+
+      bench = Minitest::Benchmark.new("meminfo")
+      _a_coeff, b_coeff, r_squared = bench.fit_linear(iterations, memsizes)
+      printf(
+        "memwatch: %s: slope = %.5f (r^2 = %.3f)\n",
+        method,
+        b_coeff,
+        r_squared,
+      )
+
+      begin
+        # we use `< 1` because losing more than 1 byte per iteration is a leak
+        refute(
+          b_coeff >= 1 && r_squared >= 0.7,
+          "best-fit slope #{b_coeff} (r^2=#{r_squared}) should be close to zero",
+        )
+      rescue Minitest::Assertion => e
+        if retry_once
+          printf("memwatch: %s: #{e}: retrying once\n", method)
+          memwatch(method, n: n, retry_once: false, &block)
+        else
+          raise e
+        end
+      end
+    end
   end
   # rubocop:enable Style/ClassVars
 
   module SAX
     class TestCase < Nokogiri::TestCase
       class Doc < XML::SAX::Document
-        attr_reader :start_elements, :start_document_called
-        attr_reader :end_elements, :end_document_called
-        attr_reader :data, :comments, :cdata_blocks, :start_elements_namespace
-        attr_reader :errors, :warnings, :end_elements_namespace
+        attr_reader :start_elements
+        attr_reader :start_document_called
+        attr_reader :end_elements
+        attr_reader :end_document_called
+        attr_reader :data
+        attr_reader :comments
+        attr_reader :cdata_blocks
+        attr_reader :start_elements_namespace
+        attr_reader :errors
+        attr_reader :warnings
+        attr_reader :end_elements_namespace
         attr_reader :xmldecls
         attr_reader :processing_instructions
+        attr_reader :references
 
         def initialize
           @errors = []
@@ -367,6 +480,13 @@ module Nokogiri
         def processing_instruction(name, content)
           @processing_instructions ||= []
           @processing_instructions << [name, content]
+          super
+        end
+
+        def reference(name, content)
+          @references ||= []
+          @references << [name, content]
+          super
         end
       end
 
@@ -458,5 +578,7 @@ module Nokogiri
     end
   end
 end
+
+warn("NOKOGIRI_TEST_GC_LEVEL: #{Nokogiri::TestCase.nokogiri_test_gc_level}")
 
 Minitest::Spec.register_spec_type(//, Nokogiri::TestCase) # make TestCase the default

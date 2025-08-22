@@ -60,13 +60,12 @@ module Nokogiri
           assert_instance_of(Nokogiri::XML::DocumentFragment, fragment)
         end
 
-        def test_many_fragments
-          100.times { Nokogiri::XML::DocumentFragment.new(xml) }
-        end
-
         def test_unparented_text_node_parse
-          fragment = Nokogiri::XML::DocumentFragment.parse("foo")
-          fragment.children.after("<bar/>")
+          # https://github.com/sparklemotion/nokogiri/issues/407
+          refute_raises do
+            fragment = Nokogiri::XML::DocumentFragment.parse("foo")
+            fragment.children.after("<bar/>")
+          end
         end
 
         def test_xml_fragment
@@ -259,8 +258,12 @@ module Nokogiri
         end
 
         def test_add_node_to_doc_fragment_segfault
-          frag = Nokogiri::XML::DocumentFragment.new(xml, "<p>hello world</p>")
-          Nokogiri::XML::Comment.new(frag, "moo")
+          skip_unless_libxml2("valgrind tests should only run with libxml2")
+
+          refute_valgrind_errors do
+            frag = Nokogiri::XML::DocumentFragment.new(xml, "<p>hello world</p>")
+            Nokogiri::XML::Comment.new(frag, "moo")
+          end
         end
 
         def test_issue_1077_parsing_of_frozen_strings
@@ -272,7 +275,9 @@ module Nokogiri
           EOS
           input.freeze
 
-          Nokogiri::XML::DocumentFragment.parse(input) # assert_nothing_raised
+          refute_raises do
+            Nokogiri::XML::DocumentFragment.parse(input)
+          end
         end
 
         def test_dup_should_exist_in_a_new_document
@@ -296,12 +301,40 @@ module Nokogiri
           assert_equal(original.to_html, duplicate.to_html)
         end
 
+        def test_dup_creates_tree_with_identical_structure_stress
+          # https://github.com/sparklemotion/nokogiri/issues/3359
+          skip_unless_libxml2("this is testing CRuby GC behavior")
+
+          original = Nokogiri::XML::DocumentFragment.parse("<div><p>hello</p></div>")
+          duplicate = original.dup
+
+          stress_memory_while do
+            duplicate.to_html
+          end
+
+          assert_equal(original.to_html, duplicate.to_html)
+        end
+
         def test_dup_creates_mutable_tree
           original = Nokogiri::XML::DocumentFragment.parse("<div><p>hello</p></div>")
           duplicate = original.dup
           duplicate.at_css("div").add_child("<b>hello there</b>")
           assert_nil(original.at_css("b"))
           refute_nil(duplicate.at_css("b"))
+        end
+
+        def test_in_context_fragment_parsing_recovery
+          skip("This tests behavior in libxml 2.13") unless Nokogiri.uses_libxml?(">= 2.13.0")
+
+          # https://github.com/sparklemotion/nokogiri/issues/2092
+          context_xml = "<root xmlns:n='https://example.com/foo'></root>"
+          context_doc = Nokogiri::XML::Document.parse(context_xml)
+          invalid_xml_fragment = "<n:a><b></n:a>" # note missing closing tag for `b`
+          fragment = context_doc.root.parse(invalid_xml_fragment)
+
+          assert_equal("a", fragment.first.name)
+          assert_equal("n", fragment.first.namespace.prefix)
+          assert_equal("https://example.com/foo", fragment.first.namespace.href)
         end
 
         def test_for_libxml_in_context_fragment_parsing_bug_workaround
@@ -367,6 +400,16 @@ module Nokogiri
               end
             end
 
+            it "accepts kwargs" do
+              frag = Nokogiri::XML.fragment(input, options: xml_default)
+              assert_equal("<a>foo</a>", frag.to_html)
+              refute_empty(frag.errors)
+
+              assert_raises(Nokogiri::SyntaxError) do
+                Nokogiri::XML.fragment(input, options: xml_strict)
+              end
+            end
+
             it "takes a config block" do
               default_config = nil
               Nokogiri::XML.fragment(input) do |config|
@@ -394,6 +437,16 @@ module Nokogiri
 
               assert_raises(Nokogiri::SyntaxError) do
                 Nokogiri::XML::DocumentFragment.parse(input, xml_strict)
+              end
+            end
+
+            it "accepts kwargs" do
+              frag = Nokogiri::XML::DocumentFragment.parse(input, options: xml_default)
+              assert_equal("<a>foo</a>", frag.to_html)
+              refute_empty(frag.errors)
+
+              assert_raises(Nokogiri::SyntaxError) do
+                Nokogiri::XML::DocumentFragment.parse(input, options: xml_strict)
               end
             end
 
@@ -425,6 +478,16 @@ module Nokogiri
 
                 assert_raises(Nokogiri::SyntaxError) do
                   Nokogiri::XML::DocumentFragment.new(Nokogiri::XML::Document.new, input, nil, xml_strict)
+                end
+              end
+
+              it "accepts options as kwargs" do
+                frag = Nokogiri::XML::DocumentFragment.new(Nokogiri::XML::Document.new, input, options: xml_default)
+                assert_equal("<a>foo</a>", frag.to_html)
+                refute_empty(frag.errors)
+
+                assert_raises(Nokogiri::SyntaxError) do
+                  Nokogiri::XML::DocumentFragment.new(Nokogiri::XML::Document.new, input, options: xml_strict)
                 end
               end
 
@@ -481,9 +544,9 @@ module Nokogiri
             Class.new(Nokogiri::XML::DocumentFragment) do
               attr_accessor :initialized_with, :initialized_count
 
-              def initialize(*args)
+              def initialize(*args, **kwargs)
                 super
-                @initialized_with = args
+                @initialized_with = [args, kwargs]
                 @initialized_count ||= 0
                 @initialized_count += 1
               end
@@ -502,8 +565,11 @@ module Nokogiri
             end
 
             it "passes args to #initialize" do
-              fragment = klass.new(xml, "<div>a</div>")
-              assert_equal([xml, "<div>a</div>"], fragment.initialized_with)
+              fragment = klass.new(xml, "<div>a</div>", options: ParseOptions::DEFAULT_XML)
+              assert_equal(
+                [[xml, "<div>a</div>"], { options: ParseOptions::DEFAULT_XML }],
+                fragment.initialized_with,
+              )
             end
           end
 

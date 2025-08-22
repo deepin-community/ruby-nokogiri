@@ -21,6 +21,7 @@ If you're looking for guidance on filing a bug report or getting support, please
 - [How to run the tests](#how-to-run-the-tests)
 - [Style Guide](#style-guide)
 - [How Continuous Integration ("CI") is configured](#how-continuous-integration-ci-is-configured)
+- [How OSS-Fuzz is configured](#how-oss-fuzz-is-configured)
 - [Packaging releases](#packaging-releases)
 - [Other utilities](#other-utilities)
 - [Bumping Java dependencies](#bumping-java-dependencies)
@@ -130,6 +131,21 @@ To run a focused test, use Minitest's `TESTOPTS`:
 bundle exec rake compile test TESTOPTS="-n/test_last_element_child/"
 ```
 
+Or to run tests on specific files, use `TESTGLOB`:
+
+``` sh
+bundle exec rake compile test TESTGLOB="test/**/test_*node*rb"
+```
+
+
+To run the test suite in parallel, set the `NCPU` environment variable; and to compile in parallel, set the `MAKEFLAGS` environment variable (you may want to set these in something like your .bashrc):
+
+``` sh
+export NCPU=8
+export MAKEFLAGS=-j8
+bundle exec rake compile test
+```
+
 
 ### CRuby advanced usage
 
@@ -163,19 +179,23 @@ bundle exec rake compile test:lldb
 ```
 
 
-Run tests and look for new memory leaks:
+Run tests and look for memory leaks with valgrind and ruby_memcheck:
 
 ``` sh
 bundle exec rake compile test:memcheck
 ```
 
 
+Run test/test_memory_usage.rb and look for memory leaks using RSS size and linear interpolation:
+
+``` sh
+bundle exec rake compile test:memory_suite
+```
+
+
 Note that by you can run the test suite with a variety of GC behaviors. For example, running a major after each test completes has, on occasion, been useful for localizing some classes of memory bugs, but does slow the suite down. Some variations of the test suite behavior are available (see `test/helper.rb` for more info):
 
 ``` sh
-# see failure messages immediately
-NOKOGIRI_TEST_FAIL_FAST=t bundle exec rake compile test
-
 # ordinary GC behavior
 NOKOGIRI_TEST_GC_LEVEL=normal bundle exec rake compile test
 
@@ -231,6 +251,79 @@ git submodule update --init  #  test/html5lib-tests
 bundle exec rake compile test
 ```
 
+If you're actively working on the libgumbo source, you will probably want a faster feedback loop than `rake clean compile test` will give you. Here's how to get more immediate builds of libgumbo whenever you change a file:
+
+``` sh
+bundle exec rake clean compile -- --gumbo-dev
+# change a gumbo file
+bundle exec rake compile # immediate compilation of changed file and relinking of nokogiri.so
+```
+
+
+### Fuzzing your gumbo HTML5 parser changes
+
+When making changes or adding new features to `gumbo-parser`, it's recommended to run [libfuzzer](https://llvm.org/docs/LibFuzzer.html) against `gumbo-parser` using various [sanitizers](https://github.com/google/sanitizers/wiki).
+
+Build the fuzzers by navigating to the `gumbo-parser` directory and running `make fuzzers`. Once built, navigate to the `gumbo-parser/fuzzer/build` directory and execute one of the following binaries in this directory:
+
+- parse_fuzzer (standard fuzzer with no sanitizer)
+- parse_fuzzer-asan (fuzzer built using [ASAN](https://clang.llvm.org/docs/AddressSanitizer.html))
+- parse_fuzzer-msan (fuzzer built using [MSAN](https://clang.llvm.org/docs/MemorySanitizer.html))
+- parse_fuzzer-ubsan (fuzzer built using [UBSAN](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html))
+
+To fuzz more efficiently, use the dictionary (gumbo.dict) and corpus (gumbo_corpus) found in `gumbo-parser/fuzzer` using the following arguments (assuming parse_fuzzer is in use):
+
+```
+./parse_fuzzer -dict=../gumbo.dict ../gumbo_corpus
+```
+
+If the binary executed successfully you should now be seeing the following output filling up your terminal (see https://llvm.org/docs/LibFuzzer.html#output for more information):
+
+```
+INFO: Seed: 4156947595
+INFO: Loaded 1 modules   (7149 inline 8-bit counters): 7149 0x58a462, 0x58c04f, 
+INFO: Loaded 1 PC tables (7149 PCs): 7149 0x53beb0,0x557d80, 
+INFO: -max_len is not provided; libFuzzer will not generate inputs larger than 4096 bytes
+INFO: A corpus is not provided, starting from an empty corpus
+#2	INITED cov: 2 ft: 2 corp: 1/1b exec/s: 0 rss: 24Mb
+	NEW_FUNC[1/44]: 0x429840 in gumbo_parse_with_options (/home/user/nokogiri/gumbo-parser/fuzzer/build/parse_fuzzer+0x429840)
+	NEW_FUNC[2/44]: 0x42c0d0 in destroy_node (/home/user/nokogiri/gumbo-parser/fuzzer/build/parse_fuzzer+0x42c0d0)
+#721	NEW    cov: 180 ft: 181 corp: 2/12b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 4 ChangeByte-ChangeByte-ChangeBit-InsertRepeatedBytes-
+#722	NEW    cov: 186 ft: 196 corp: 3/23b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 ChangeBit-
+#723	NEW    cov: 186 ft: 228 corp: 4/34b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 ChangeBinInt-
+#724	NEW    cov: 188 ft: 241 corp: 5/45b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 ChangeBit-
+#725	NEW    cov: 188 ft: 254 corp: 6/56b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 ChangeByte-
+#726	NEW    cov: 188 ft: 270 corp: 7/67b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 CopyPart-
+#732	NEW    cov: 188 ft: 279 corp: 8/78b lim: 11 exec/s: 0 rss: 27Mb L: 11/11 MS: 1 ChangeBit-
+	NEW_FUNC[1/1]: 0x441de0 in gumbo_token_destroy (/home/user/nokogiri/gumbo-parser/fuzzer/build/parse_fuzzer+0x441de0)
+```
+
+However, if the fuzzer finds a "crash" (indicating that a bug has been found) it will stop fuzzing and the following output would be expected:
+
+```
+INFO: Seed: 1523017872
+INFO: Loaded 1 modules (16 guards): 0x744e60, 0x744ea0,
+INFO: -max_len is not provided, using 64
+INFO: A corpus is not provided, starting from an empty corpus
+#0    READ units: 1
+#1    INITED cov: 3 ft: 2 corp: 1/1b exec/s: 0 rss: 24Mb
+#3811 NEW    cov: 4 ft: 3 corp: 2/2b exec/s: 0 rss: 25Mb L: 1 MS: 5 ChangeBit-ChangeByte-ChangeBit-ShuffleBytes-ChangeByte-
+#3827 NEW    cov: 5 ft: 4 corp: 3/4b exec/s: 0 rss: 25Mb L: 2 MS: 1 CopyPart-
+#3963 NEW    cov: 6 ft: 5 corp: 4/6b exec/s: 0 rss: 25Mb L: 2 MS: 2 ShuffleBytes-ChangeBit-
+#4167 NEW    cov: 7 ft: 6 corp: 5/9b exec/s: 0 rss: 25Mb L: 3 MS: 1 InsertByte-
+==31511== ERROR: libFuzzer: deadly signal
+...
+artifact_prefix='./'; Test unit written to ./crash-b13e8756b13a00cf168300179061fb4b91fefbed
+```
+
+The above indicates that a crash has been identified and it can be reproduced by feeding the `crash-b13e8756b13a00cf168300179061fb4b91fefbed` file back into the binary used for fuzzing (e.g. parse-fuzzer) using the following command:
+
+```
+parse_fuzzer crash-b13e8756b13a00cf168300179061fb4b91fefbed
+```
+
+If you'd like to learn more about libfuzzer please give https://github.com/google/fuzzing/blob/master/tutorial/libFuzzerTutorial.md a try.
+
 
 ## Style Guide
 
@@ -251,25 +344,44 @@ Some guidelines (see [lib/nokogiri/xml/node.rb](lib/nokogiri/xml/node.rb) and [e
   - name all the aliases of a method
   - indicate block/yield usage of a method
 - Briefly explain the purpose of the method, what it returns, and what side effects it has
-- Use a `[Parameters]` definition to note the expected types of all the parameters as a bulleted list
-- Use a `[Returns]` definition to note the return type
-- Use a `[Yields]` definition to note the block parameters
-- Use a `⚠` character to warn the user about tricky usage
-- Use a `💡` character to call attention to important notes
-- `See also:` should be used to call out related methods
-- `Since` should be used to indicate the version in which the code was introduced
-- Prefer to **show** nuanced behavior in code examples, rather than try to explain it in prose.
+- Method signatures
+  - Use a `[Parameters]` definition to note the expected types of all the parameters as a bulleted list
+  - Use a `[Returns]` definition to note the return type
+  - Use a `[Yields]` definition to note the block parameters
+  - use RBS syntax whenever possible to declare variable types
+- Callouts
+  - Use a `🛡` character for security-related notes
+  - Use a `⚠` character to warn the user about tricky usage
+  - Use a `💡` character to call attention to other important notes
+- Examples
+  - Prefer to **show** nuanced behavior in code examples, rather than try to explain it in prose.
+  - Use the line `*Example:* <Brief explanation>` to name examples and visually separate them
+  - Indent two extra columns to get code-block formatting
+- Metadata
+  - `See also:` should be used to call out related methods
+  - `Since` should be used to indicate the version in which the code was introduced
 
 
 ### Code
 
-I don't feel very strongly about code style, but this project follows [Shopify's Ruby Style Guide](https://shopify.github.io/ruby-style-guide/), and for C and Java code the project uses the `astyle` configuration laid out in `./rakelib/format.rake`.
+I don't feel very strongly about code style, but this project uses [Standard](https://github.com/standardrb/standard) for Ruby, and uses the `astyle` configuration laid out in `./rakelib/format.rake` for C and Java.
 
-You can auto-format the C, Java, and Ruby code with `rake format`.
+You can auto-format everything with `rake format`.
 
 There are some pending Rubocop rules in `.rubocop_todo.yml`. If you'd like to fix them up, I will happily merge your pull request.
 
-No, I don't want to debate any of the style choices.
+For C code, naming is currently inconsistent, but I am generally moving towards some guidelines that will make stack traces more readable and usable:
+
+- Public functions and functions bound to Ruby methods should start with `noko_` followed by the snake case class name.
+  - e.g., `noko_xml_sax_parser_context_...`
+- Static functions (file scope) do not need the "noko" prefix, but should be named with the snake case class name.
+  - e.g., `xml_sax_parser_context_...`
+- Ruby singleton methods should have `_s_` before the method name
+  - e.g., `noko_xml_sax_parser_context_s_io` for `Nokogiri::XML::SAX::ParserContext.io`
+- Ruby instance methods should have `__` before the method name
+  - e.g., `noko_xml_sax_parser_context__line` for `Nokogiri::XML::SAX::ParserContext#line`
+- Ruby attribute getters and setters should have `_get` or `_set` as a suffix
+  - e.g., `noko_xml_sax_parser_context__recovery_set` for `Nokogiri::XML::SAX::ParserContext#recovery=`
 
 
 ## How Continuous Integration ("CI") is configured
@@ -341,6 +453,17 @@ These tests should use `Nokogiri::TestBenchmark` as the base class, and be in a 
   - note that `libgumbo` is built outside of `ports/` to allow us to do this caching safely
 
 
+## How OSS-Fuzz is configured
+
+[OSS-Fuzz](https://oss-fuzz.com/) is a service that runs fuzzing against open-source libraries.
+
+OSS-Fuzz was configured to fuzz Nokogiri's libgumbo in https://github.com/google/oss-fuzz/pull/11004. Updating the configuration should be done in that project.
+
+Notifications go to `nokogiri-oss-fuzz@googlegroups.com`.
+
+Some historical context can be found in [discussion #2992](https://github.com/sparklemotion/nokogiri/discussions/2992) and [pull request #3007](https://github.com/sparklemotion/nokogiri/pull/3007) by @fuzzy-boiii23a.
+
+
 ## Packaging releases
 
 As a prerequisite please make sure you have `docker` correctly installed, to build native (precompiled) gems.
@@ -353,8 +476,6 @@ See [Making a release](#making-a-release) below for the checklist.
 ## Other utilities
 
 `scripts/test-exported-symbols` checks the compiled `nokogiri.so` library for surprising exported symbols. This script likely only works on Linux, sorry.
-
-`scripts/test-nokogumbo-compatibility` is used by CI to ensure that Nokogumbo installs correctly against the currently-installed version of Nokogiri. Nokogumbo receives this extra care because it compiles against Nokogiri's and libxml2's header files, and makes assumptions about what symbols are exported by Nokogiri's extension library.
 
 `scripts/files-modified-by-open-prs` is a hack to see what files are being proposed to change in the set of open pull requests. This might be useful if you're thinking about radically changing a file, to be aware of what merge conflicts might result. This could probably be a rake task.
 
@@ -389,17 +510,20 @@ The `Rakefile` used to be a big fat mess. It's now decomposed into a small set o
 
 ## Making a release
 
-A quick checklist:
+A quick checklist for releasing Nokogiri:
 
-- [ ] make sure CI is green!
-- [ ] update `CHANGELOG.md` and `lib/nokogiri/version/constant.rb`
-- [ ] create a git tag
-- [ ] run `scripts/build-gems` and make sure it completes and all the tests pass
-- [ ] `for g in gems/*.gem ; do gem push $g ; done`
-- [ ] create a release at https://github.com/sparklemotion/nokogiri/releases and provide sha2 checksums
-- if security-related,
+- Prechecks
+  - [ ] make sure CI is green!
+  - [ ] update `CHANGELOG.md` and `lib/nokogiri/version/constant.rb`
+  - [ ] commit and create a git tag
+  - [ ] run `scripts/build-gems` and make sure it completes and all the tests pass
+- Release
+  - [ ] `git push && git push --tags`
+  - [ ] `for g in gems/*.gem ; do gem push $g ; done`
+  - [ ] create a release at https://github.com/sparklemotion/nokogiri/releases and provide sha2 checksums
+- If the release has security fixes ...
   - [ ] publish a GHSA
   - [ ] email ruby-security-ann@googlegroups.com and ruby-talk@ruby-lang.org
-  - [ ] submit a PR to https://github.com/rubysec/ruby-advisory-db
-- [ ] update nokogiri.org
-- [ ] bump `lib/nokogiri/version/constant.rb` to a prerelease version like `v1.14.0.dev`
+- Post-release
+  - [ ] update nokogiri.org
+  - [ ] bump `lib/nokogiri/version/constant.rb` to a prerelease version like `v1.14.0.dev`

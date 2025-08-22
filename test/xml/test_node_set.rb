@@ -284,22 +284,22 @@ module Nokogiri
             assert(node_set_one = xml.xpath("//employee"))
             assert(node_set_two = xml.xpath("//employee"))
 
-            refute_equal(node_set_one.object_id, node_set_two.object_id)
+            refute_same(node_set_one, node_set_two)
             refute_same(node_set_one, node_set_two)
 
-            assert_equal(node_set_one, node_set_two)
+            assert_operator(node_set_one, :==, node_set_two) # rubocop:disable Minitest/AssertEqual
           end
 
           it "handles comparison to a string" do
             node_set_one = xml.xpath("//employee")
-            refute(node_set_one == "asdfadsf")
+            refute_operator(node_set_one, :==, "asdfadsf") # rubocop:disable Minitest/RefuteEqual
           end
 
           it "returns false if same elements are out of order" do
             one = xml.xpath("//employee")
             two = xml.xpath("//employee")
             two.push(two.shift)
-            refute_equal(one, two)
+            refute_operator(one, :==, two) # rubocop:disable Minitest/RefuteEqual
           end
 
           it "returns false if one is a subset of the other" do
@@ -307,8 +307,8 @@ module Nokogiri
             node_set_two = xml.xpath("//employee")
             node_set_two.delete(node_set_two.first)
 
-            refute(node_set_one == node_set_two)
-            refute(node_set_two == node_set_one)
+            refute_operator(node_set_one, :==, node_set_two) # rubocop:disable Minitest/RefuteEqual
+            refute_operator(node_set_two, :==, node_set_one) # rubocop:disable Minitest/RefuteEqual
           end
         end
 
@@ -366,6 +366,32 @@ module Nokogiri
               assert_equal a, b
             end
           end
+        end
+
+        specify "test_dup_should_not_copy_singleton_class" do
+          # https://github.com/sparklemotion/nokogiri/issues/316
+          m = Module.new do
+            def foo; end
+          end
+
+          set = Nokogiri::XML::Document.parse("<root/>").css("root")
+          set.extend(m)
+
+          assert_respond_to(set, :foo)
+          refute_respond_to(set.dup, :foo)
+        end
+
+        specify "test_clone_should_copy_singleton_class" do
+          # https://github.com/sparklemotion/nokogiri/issues/316
+          m = Module.new do
+            def foo; end
+          end
+
+          set = Nokogiri::XML::Document.parse("<root/>").css("root")
+          set.extend(m)
+
+          assert_respond_to(set, :foo)
+          assert_respond_to(set.clone, :foo)
         end
 
         specify "#dup on empty set" do
@@ -805,6 +831,7 @@ module Nokogiri
           it "returns an enumerator given no block" do
             skip("enumerators confuse valgrind") if i_am_running_in_valgrind
             skip("enumerators confuse ASan") if i_am_running_with_asan
+            skip("https://bugs.ruby-lang.org/issues/20085") if RUBY_DESCRIPTION.include?("aarch64") && RUBY_VERSION == "3.3.0"
 
             employees = xml.search("//employee")
             enum = employees.each
