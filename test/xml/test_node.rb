@@ -105,9 +105,19 @@ module Nokogiri
           context_node = doc.at_css("div")
           nodeset = context_node.parse("<div </div>")
 
-          assert_equal(1, doc.errors.length)
-          assert_equal(1, nodeset.length)
-          assert_equal("<div></div>", nodeset.to_s)
+          if Nokogiri.uses_libxml?(">= 2.14.0")
+            assert_empty(doc.errors)
+            assert_pattern do
+              nodeset => [
+                { name: "div", attributes: [{name: "<", value: ""}, { name: "div", value: ""}] },
+              ]
+            end
+          else
+            assert_equal(1, doc.errors.length)
+            assert_equal(1, nodeset.length)
+            assert_equal("<div></div>", nodeset.to_s)
+          end
+
           assert_instance_of(Nokogiri::HTML4::Document, nodeset.document)
           assert_instance_of(Nokogiri::HTML4::Document, nodeset.first.document)
         end
@@ -117,14 +127,25 @@ module Nokogiri
           context_node = doc.at_css("div")
           nodeset = context_node.parse("<div </div>", &:recover)
 
-          assert_equal(1, doc.errors.length)
-          assert_equal(1, nodeset.length)
-          assert_equal("<div></div>", nodeset.to_s)
+          if Nokogiri.uses_libxml?(">= 2.14.0")
+            assert_empty(doc.errors)
+            assert_pattern do
+              nodeset => [
+                { name: "div", attributes: [{name: "<", value: ""}, { name: "div", value: ""}] },
+              ]
+            end
+          else
+            assert_equal(1, doc.errors.length)
+            assert_equal(1, nodeset.length)
+            assert_equal("<div></div>", nodeset.to_s)
+          end
           assert_instance_of(Nokogiri::HTML4::Document, nodeset.document)
           assert_instance_of(Nokogiri::HTML4::Document, nodeset.first.document)
         end
 
         def test_node_context_parsing_of_malformed_html_fragment_without_recover_is_not_corrected
+          skip("libxml2 2.14.0 no longer raises this error") if Nokogiri.uses_libxml?(">= 2.14.0")
+
           doc = HTML4.parse("<html><body><div></div></body></html>")
           context_node = doc.at_css("div")
           assert_raises(Nokogiri::XML::SyntaxError) do
@@ -143,14 +164,19 @@ module Nokogiri
         def test_parse_error_list
           error_count = xml.errors.length
           xml.root.parse("<hello>")
-          assert(error_count < xml.errors.length, "errors should have increased")
+          assert_operator(error_count, :<, xml.errors.length, "errors should have increased")
         end
 
         def test_parse_error_on_fragment_with_empty_document
           doc = Document.new
           fragment = DocumentFragment.new(doc, "<foo><bar/></foo>")
-          node = fragment % "bar"
+          node = fragment.at_css("bar")
+
+          assert_empty(doc.errors)
+
           node.parse("<baz><</baz>")
+
+          refute_empty(doc.errors)
         end
 
         def test_parse_with_unparented_text_context_node
@@ -204,18 +230,31 @@ module Nokogiri
           assert_equal(0, node.children.length)
         end
 
-        def test_dup_to_another_document
-          skip_unless_libxml2("Node.dup with new_parent arg is only implemented on CRuby")
-          doc1 = Nokogiri::HTML4::Document.parse("<root><div><p>hello</p></div></root>")
-          doc2 = Nokogiri::HTML4::Document.parse("<div></div>")
+        def test_dup_same_parent_document_is_default
+          doc = XML::Document.parse("<root><div><p>hello</p></div></root>")
+          div = doc.at_css("div")
+          node = div.dup
+          assert_same(div.document, node.document)
+        end
+
+        def test_dup_different_parent_document
+          doc1 = XML::Document.parse("<root><div><p>hello</p></div></root>")
+          doc2 = XML::Document.parse("<div></div>")
+
+          x = Module.new { def awesome!; end }
+          doc2.decorators(XML::Node) << x
+          doc2.decorate!
 
           div = doc1.at_css("div")
-          duplicate_div = div.dup(1, doc2)
+          copy = div.dup(1, doc2)
 
-          refute_nil(doc1.at_css("div"))
-          assert_equal(doc2, duplicate_div.document)
-          assert_equal(1, duplicate_div.children.length)
-          assert_equal("<p>hello</p>", duplicate_div.children.first.to_html)
+          assert_same(doc2, copy.document)
+          assert_equal(1, copy.children.length, "expected a deep copy")
+          assert_respond_to(copy, :awesome!, "expected decorators to be copied")
+
+          copy = div.dup(0, doc2)
+
+          assert_equal(0, copy.children.length, "expected a shallow copy")
         end
 
         def test_subclass_dup
@@ -478,6 +517,44 @@ module Nokogiri
           end
         end
 
+        def test_dup_should_not_copy_singleton_class
+          # https://github.com/sparklemotion/nokogiri/issues/316
+          m = Module.new do
+            def foo; end
+          end
+
+          node = Nokogiri::XML::Document.parse("<root/>").root
+          node.extend(m)
+
+          assert_respond_to(node, :foo)
+          refute_respond_to(node.dup, :foo)
+        end
+
+        def test_clone_should_copy_singleton_class
+          # https://github.com/sparklemotion/nokogiri/issues/316
+          m = Module.new do
+            def foo; end
+          end
+
+          node = Nokogiri::XML::Document.parse("<root/>").root
+          node.extend(m)
+
+          assert_respond_to(node, :foo)
+          assert_respond_to(node.clone, :foo)
+        end
+
+        def test_inspect_object_with_no_data_ptr
+          # test for the edge case when an exception is thrown during object construction/copy
+          node = Nokogiri::XML("<root>").root
+          refute_includes(node.inspect, "(no data)")
+
+          if node.respond_to?(:data_ptr?)
+            node.stub(:data_ptr?, false) do
+              assert_includes(node.inspect, "(no data)")
+            end
+          end
+        end
+
         def test_fragment_creates_appropriate_class
           frag = Nokogiri.XML("<root><child/></root>").at_css("child").fragment("<thing/>")
           assert_instance_of(Nokogiri::XML::DocumentFragment, frag)
@@ -547,7 +624,7 @@ module Nokogiri
           node = xml.at("address")
           ns = node.add_namespace(nil, "http://tenderlovemaking.com")
           ns2 = node.add_namespace(nil, "http://tenderlovemaking.com")
-          assert_equal(ns.object_id, ns2.object_id)
+          assert_same(ns, ns2)
         end
 
         def test_add_multiple_namespaces
@@ -710,7 +787,7 @@ module Nokogiri
           assert_equal(xml.serialize(nil, conf), string)
         end
 
-        def test_hold_refence_to_subnode
+        def test_hold_reference_to_subnode
           doc = Nokogiri::XML(<<~XML)
             <root>
               <a>
@@ -1328,18 +1405,9 @@ module Nokogiri
           assert_equal("fr", subject.lang)
         end
 
-        def test_text_node_robustness_gh1426
-          skip("only run if NOKOGIRI_GC is set") unless ENV["NOKOGIRI_GC"]
-          skip_unless_libxml2("No need to test libxml-ruby workarounds on JRuby")
-          # notably, the original bug report was about libxml-ruby interactions
-          # this test should blow up under valgrind if we regress on libxml-ruby workarounds
-          # side note: this was fixed in libxml-ruby 2.9.0 by https://github.com/xml4r/libxml-ruby/pull/119
-          message = "<section><h2>BOOM!</h2></section>"
-          10_000.times do
-            node = Nokogiri::HTML4::DocumentFragment.parse(message).at_css("h2")
-            node.add_previous_sibling(Nokogiri::XML::Text.new("before", node.document))
-            node.add_next_sibling(Nokogiri::XML::Text.new("after", node.document))
-          end
+        # issue 2559
+        def test_serialize_unparented_node
+          assert_equal("asdf", Nokogiri::HTML4::Document.parse("<div></div>").create_text_node("asdf").to_s)
         end
 
         describe "#wrap" do
@@ -1394,12 +1462,22 @@ module Nokogiri
             end
           end
 
+          it "raises an error if the input is not parseable" do
+            thing = doc.at_css("thing")
+
+            e = assert_raises(RuntimeError) do
+              thing.wrap("<<")
+            end
+            assert_includes(e.message, "Failed to parse '<<' in the context of a 'root' element")
+          end
+
           it "raises an ArgumentError on other types" do
             thing = doc.at_css("thing")
 
-            assert_raises(ArgumentError) do
+            e = assert_raises(ArgumentError) do
               thing.wrap(1)
             end
+            assert_includes(e.message, "Requires a String or Node argument, and cannot accept a Integer")
           end
         end
 
@@ -1506,7 +1584,7 @@ module Nokogiri
             if Nokogiri.uses_libxml?
               doc = Nokogiri::XML(xml, &:nobig_lines)
               node = doc.at_css("x")
-              assert_operator(node.line, :==, max_short_int)
+              assert_equal(node.line, max_short_int)
             end
 
             doc = Nokogiri::XML(xml)

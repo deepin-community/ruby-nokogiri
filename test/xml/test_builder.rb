@@ -14,14 +14,6 @@ module Nokogiri
         assert_equal("world", doc.root["abcDef"])
       end
 
-      def test_builder_multiple_nodes
-        Nokogiri::XML::Builder.new do |xml|
-          0.upto(10) do
-            xml.text("test")
-          end
-        end
-      end
-
       def test_builder_resilient_to_exceptions
         builder = Nokogiri::XML::Builder.new do |xml|
           xml.root do
@@ -244,9 +236,9 @@ module Nokogiri
       end
 
       def test_specified_namespace_undeclared
-        Nokogiri::XML::Builder.new do |xml|
-          xml.root do
-            assert_raises(ArgumentError) do
+        assert_raises(ArgumentError) do
+          Nokogiri::XML::Builder.new do |xml|
+            xml.root do
               xml[:foo].bar
             end
           end
@@ -289,7 +281,7 @@ module Nokogiri
         assert_equal(1, builder.doc.xpath('//foo[@id = "hello"]').length)
       end
 
-      def test_nested_local_variable
+      def test_nested_local_variable_and_instance_variable
         @ivar = "hello"
         local_var = "hello world"
         builder = Nokogiri::XML::Builder.new do |xml|
@@ -299,12 +291,14 @@ module Nokogiri
             xml.baz do
               xml.text(@ivar)
             end
+            xml.quux.foo { xml.text(@ivar) }
           end
         end
 
         assert_equal("hello world", builder.doc.at("//root/foo").content)
         assert_equal("hello", builder.doc.at("//root/bar").content)
         assert_equal("hello", builder.doc.at("baz").content)
+        assert_equal("hello", builder.doc.at("quux.foo").content)
       end
 
       def test_raw_append
@@ -315,6 +309,32 @@ module Nokogiri
         end
 
         assert_equal("hello", builder.doc.at("/root").content)
+      end
+
+      def test_node_builder_method_missing_yield
+        # https://github.com/sparklemotion/nokogiri/issues/1041
+        who_is_self = nil
+
+        Nokogiri::XML::Builder.new do |xml|
+          xml.root do
+            xml.div.foo { who_is_self = self }
+          end
+        end
+
+        assert_equal(self, who_is_self)
+      end
+
+      def test_node_builder_method_missing_instance_eval
+        # https://github.com/sparklemotion/nokogiri/issues/1041
+        who_is_self = nil
+
+        builder = Nokogiri::XML::Builder.new do
+          root do
+            div.foo { who_is_self = self }
+          end
+        end
+
+        assert_equal(builder, who_is_self)
       end
 
       def test_raw_append_with_instance_eval
@@ -425,7 +445,7 @@ module Nokogiri
         envelope = builder.doc.at_css("envelope")
         package = builder.doc.at_css("package")
         assert_equal(envelope.namespace, package.namespace)
-        assert_equal(envelope.namespace.object_id, package.namespace.object_id)
+        assert_same(envelope.namespace, package.namespace)
       end
 
       def test_builder_uses_proper_document_class

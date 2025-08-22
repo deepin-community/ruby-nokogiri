@@ -143,12 +143,14 @@ module Nokogiri
       end
 
       def test_io_that_reads_too_much
-        io = if Nokogiri.jruby?
-          ReallyBadIO4Java.new
-        else
-          ReallyBadIO.new
+        refute_raises do
+          io = if Nokogiri.jruby?
+            ReallyBadIO4Java.new
+          else
+            ReallyBadIO.new
+          end
+          Nokogiri::XML::Reader(io)
         end
-        Nokogiri::XML::Reader(io)
       end
 
       def test_in_memory
@@ -450,16 +452,27 @@ module Nokogiri
       end
 
       def test_inner_xml
-        str = "<x><y>hello</y></x>"
+        str = "<x><y>hello &amp; goodbye</y></x>"
         reader = Nokogiri::XML::Reader.from_memory(str)
 
         reader.read
 
-        assert_equal("<y>hello</y>", reader.inner_xml)
+        assert_equal("<y>hello &amp; goodbye</y>", reader.inner_xml)
       end
 
       def test_outer_xml
-        str = ["<x><y>hello</y></x>", "<y>hello</y>", "hello", "<y/>", "<x/>"]
+        str = [
+          "<x><y>hello &amp; goodbye</y></x>",
+          "<y>hello &amp; goodbye</y>",
+          "hello &amp; goodbye",
+          "<y/>",
+          "<x/>",
+        ]
+        if Nokogiri.jruby?
+          # jruby will split the string up into three nodes, shrug.
+          str.delete_at(2)
+          str.insert(2, "hello ", "&amp;", " goodbye")
+        end
         reader = Nokogiri::XML::Reader.from_memory(str.first)
 
         xml = []
@@ -501,55 +514,6 @@ module Nokogiri
             nil,
           ],
           reader.map(&:namespace_uri),
-        )
-      end
-
-      def test_reader_node_attributes_keep_a_reference_to_the_reader
-        skip_unless_libxml2("valgrind tests should only run with libxml2")
-
-        attribute_nodes = []
-
-        refute_valgrind_errors do
-          xml = <<~EOF
-            <root>
-              <content first_name="bob" last_name="loblaw"/>
-            </root>
-          EOF
-
-          reader = Nokogiri::XML::Reader.from_memory(xml)
-          reader.each do |element|
-            assert_output(nil, /Reader#attribute_nodes is deprecated/) do
-              attribute_nodes += element.attribute_nodes
-            end
-          end
-        end
-
-        assert_operator(attribute_nodes.length, :>, 0)
-        attribute_nodes.inspect
-      end
-
-      def test_namespaced_attributes
-        reader = Nokogiri::XML::Reader.from_memory(<<-eoxml)
-        <x xmlns:edi='http://ecommerce.example.org/schema' xmlns:commons="http://rets.org/xsd/RETSCommons">
-          <edi:foo commons:street-number="43">hello</edi:foo>
-          <y edi:name="francis" bacon="87"/>
-        </x>
-        eoxml
-        attr_ns = []
-        while reader.read
-          next unless reader.node_type == Nokogiri::XML::Node::ELEMENT_NODE
-
-          assert_output(nil, /Reader#attribute_nodes is deprecated/) do
-            reader.attribute_nodes.each { |attr| attr_ns << (attr.namespace.nil? ? nil : attr.namespace.prefix) }
-          end
-        end
-        assert_equal(
-          [
-            "commons",
-            "edi",
-            nil,
-          ],
-          attr_ns,
         )
       end
 
@@ -765,7 +729,12 @@ module Nokogiri
           e = assert_raises(Nokogiri::XML::SyntaxError) do
             reader.attribute_hash
           end
-          assert_includes(e.message, "FATAL: Extra content at the end of the document")
+          expected = if Nokogiri.uses_libxml?(">= 2.12.0") # upstream commit 53050b1d
+            "FATAL: Premature end of data in tag foo line 1"
+          else
+            "FATAL: Extra content at the end of the document"
+          end
+          assert_includes(e.message, expected)
         end
 
         assert_equal(1, reader.errors.length)
@@ -796,7 +765,12 @@ module Nokogiri
           e = assert_raises(Nokogiri::XML::SyntaxError) do
             reader.namespaces
           end
-          assert_includes(e.message, "FATAL: Extra content at the end of the document")
+          expected = if Nokogiri.uses_libxml?(">= 2.12.0") # upstream commit 53050b1d
+            "FATAL: Premature end of data in tag foo line 1"
+          else
+            "FATAL: Extra content at the end of the document"
+          end
+          assert_includes(e.message, expected)
         end
 
         assert_equal(1, reader.errors.length)

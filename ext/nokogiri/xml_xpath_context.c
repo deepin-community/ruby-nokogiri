@@ -12,23 +12,23 @@ static const xmlChar *NOKOGIRI_BUILTIN_PREFIX = (const xmlChar *)"nokogiri-built
 static const xmlChar *NOKOGIRI_BUILTIN_URI = (const xmlChar *)"https://www.nokogiri.org/default_ns/ruby/builtins";
 
 static void
-xml_xpath_context_deallocate(void *data)
+_noko_xml_xpath_context_dfree(void *data)
 {
   xmlXPathContextPtr c_context = data;
   xmlXPathFreeContext(c_context);
 }
 
-static const rb_data_type_t xml_xpath_context_type = {
-  .wrap_struct_name = "Nokogiri::XML::XPathContext",
+static const rb_data_type_t _noko_xml_xpath_context_type = {
+  .wrap_struct_name = "xmlXPathContext",
   .function = {
-    .dfree = xml_xpath_context_deallocate,
+    .dfree = _noko_xml_xpath_context_dfree,
   },
   .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED,
 };
 
 /* find a CSS class in an HTML element's `class` attribute */
 static const xmlChar *
-builtin_css_class(const xmlChar *str, const xmlChar *val)
+_noko_xml_xpath_context__css_class(const xmlChar *str, const xmlChar *val)
 {
   int val_len;
 
@@ -62,9 +62,9 @@ builtin_css_class(const xmlChar *str, const xmlChar *val)
   return (NULL);
 }
 
-/* xmlXPathFunction to wrap builtin_css_class() */
+/* xmlXPathFunction to wrap _noko_xml_xpath_context__css_class() */
 static void
-xpath_builtin_css_class(xmlXPathParserContextPtr ctxt, int nargs)
+noko_xml_xpath_context_xpath_func_css_class(xmlXPathParserContextPtr ctxt, int nargs)
 {
   xmlXPathObjectPtr hay, needle;
 
@@ -85,7 +85,7 @@ xpath_builtin_css_class(xmlXPathParserContextPtr ctxt, int nargs)
     XP_ERROR(XPATH_INVALID_TYPE);
   }
 
-  if (builtin_css_class(hay->stringval, needle->stringval)) {
+  if (_noko_xml_xpath_context__css_class(hay->stringval, needle->stringval)) {
     valuePush(ctxt, xmlXPathNewBoolean(1));
   } else {
     valuePush(ctxt, xmlXPathNewBoolean(0));
@@ -99,7 +99,7 @@ xpath_builtin_css_class(xmlXPathParserContextPtr ctxt, int nargs)
 /* xmlXPathFunction to select nodes whose local name matches, for HTML5 CSS queries that should
  * ignore namespaces */
 static void
-xpath_builtin_local_name_is(xmlXPathParserContextPtr ctxt, int nargs)
+noko_xml_xpath_context_xpath_func_local_name_is(xmlXPathParserContextPtr ctxt, int nargs)
 {
   xmlXPathObjectPtr element_name;
 
@@ -124,25 +124,26 @@ xpath_builtin_local_name_is(xmlXPathParserContextPtr ctxt, int nargs)
  *   register_ns(prefix, uri) → Nokogiri::XML::XPathContext
  *
  * Register the namespace with +prefix+ and +uri+ for use in future queries.
+ * Passing a uri of +nil+ will unregister the namespace.
  *
  * [Returns] +self+
  */
 static VALUE
-rb_xml_xpath_context_register_ns(VALUE rb_context, VALUE prefix, VALUE uri)
+noko_xml_xpath_context_register_ns(VALUE rb_context, VALUE prefix, VALUE uri)
 {
   xmlXPathContextPtr c_context;
+  const xmlChar *ns_uri;
 
-  TypedData_Get_Struct(
-    rb_context,
-    xmlXPathContext,
-    &xml_xpath_context_type,
-    c_context
-  );
+  TypedData_Get_Struct(rb_context, xmlXPathContext, &_noko_xml_xpath_context_type, c_context);
 
-  xmlXPathRegisterNs(c_context,
-                     (const xmlChar *)StringValueCStr(prefix),
-                     (const xmlChar *)StringValueCStr(uri)
-                    );
+  if (NIL_P(uri)) {
+    ns_uri = NULL;
+  } else {
+    ns_uri = (const xmlChar *)StringValueCStr(uri);
+  }
+
+  xmlXPathRegisterNs(c_context, (const xmlChar *)StringValueCStr(prefix), ns_uri);
+
   return rb_context;
 }
 
@@ -151,29 +152,25 @@ rb_xml_xpath_context_register_ns(VALUE rb_context, VALUE prefix, VALUE uri)
  *   register_variable(name, value) → Nokogiri::XML::XPathContext
  *
  * Register the variable +name+ with +value+ for use in future queries.
+ * Passing a value of +nil+ will unregister the variable.
  *
  * [Returns] +self+
  */
 static VALUE
-rb_xml_xpath_context_register_variable(VALUE rb_context, VALUE name, VALUE value)
+noko_xml_xpath_context_register_variable(VALUE rb_context, VALUE name, VALUE value)
 {
   xmlXPathContextPtr c_context;
   xmlXPathObjectPtr xmlValue;
 
-  TypedData_Get_Struct(
-    rb_context,
-    xmlXPathContext,
-    &xml_xpath_context_type,
-    c_context
-  );
+  TypedData_Get_Struct(rb_context, xmlXPathContext, &_noko_xml_xpath_context_type, c_context);
 
-  xmlValue = xmlXPathNewCString(StringValueCStr(value));
+  if (NIL_P(value)) {
+    xmlValue = NULL;
+  } else {
+    xmlValue = xmlXPathNewCString(StringValueCStr(value));
+  }
 
-  xmlXPathRegisterVariable(
-    c_context,
-    (const xmlChar *)StringValueCStr(name),
-    xmlValue
-  );
+  xmlXPathRegisterVariable(c_context, (const xmlChar *)StringValueCStr(name), xmlValue);
 
   return rb_context;
 }
@@ -184,7 +181,7 @@ rb_xml_xpath_context_register_variable(VALUE rb_context, VALUE name, VALUE value
  *  returns Qundef if no conversion was possible.
  */
 static VALUE
-xpath2ruby(xmlXPathObjectPtr c_xpath_object, xmlXPathContextPtr c_context)
+_noko_xml_xpath_context__xpath2ruby(xmlXPathObjectPtr c_xpath_object, xmlXPathContextPtr c_context)
 {
   VALUE rb_retval;
 
@@ -238,7 +235,7 @@ Nokogiri_marshal_xpath_funcall_and_return_values(
 
   for (int j = argc - 1 ; j >= 0 ; --j) {
     c_xpath_object = valuePop(ctxt);
-    argv[j] = xpath2ruby(c_xpath_object, ctxt->context);
+    argv[j] = _noko_xml_xpath_context__xpath2ruby(c_xpath_object, ctxt->context);
     if (argv[j] == Qundef) {
       argv[j] = NOKOGIRI_STR_NEW2(xmlXPathCastToString(c_xpath_object));
     }
@@ -294,7 +291,7 @@ Nokogiri_marshal_xpath_funcall_and_return_values(
 }
 
 static void
-method_caller(xmlXPathParserContextPtr ctxt, int argc)
+_noko_xml_xpath_context__handler_invoker(xmlXPathParserContextPtr ctxt, int argc)
 {
   VALUE rb_xpath_handler = Qnil;
   const char *method_name = NULL ;
@@ -316,18 +313,15 @@ method_caller(xmlXPathParserContextPtr ctxt, int argc)
 }
 
 static xmlXPathFunction
-handler_lookup(void *data, const xmlChar *c_name, const xmlChar *c_ns_uri)
+_noko_xml_xpath_context_handler_lookup(void *data, const xmlChar *c_name, const xmlChar *c_ns_uri)
 {
   VALUE rb_handler = (VALUE)data;
   if (rb_respond_to(rb_handler, rb_intern((const char *)c_name))) {
     if (c_ns_uri == NULL) {
-      NOKO_WARN_DEPRECATION(
-        "A custom XPath or CSS handler function named '%s' is being invoked without a namespace."
-        " Please update your query to reference this function as 'nokogiri:%s'."
-        " Invoking custom handler functions without a namespace is deprecated and support will be removed in a future release of Nokogiri.",
-        c_name, c_name);
+      NOKO_WARN_DEPRECATION("A custom XPath or CSS handler function named '%s' is being invoked without a namespace. Please update your query to reference this function as 'nokogiri:%s'. Invoking custom handler functions without a namespace is deprecated and will become an error in Nokogiri v1.17.0.",
+                            c_name, c_name); // TODO deprecated in v1.15.0, remove in v1.19.0
     }
-    return method_caller;
+    return _noko_xml_xpath_context__handler_invoker;
   }
 
   return NULL;
@@ -335,7 +329,7 @@ handler_lookup(void *data, const xmlChar *c_name, const xmlChar *c_ns_uri)
 
 PRINTFLIKE_DECL(2, 3)
 static void
-generic_exception_pusher(void *data, const char *msg, ...)
+_noko_xml_xpath_context__generic_exception_pusher(void *data, const char *msg, ...)
 {
   VALUE rb_errors = (VALUE)data;
   VALUE rb_message;
@@ -346,7 +340,7 @@ generic_exception_pusher(void *data, const char *msg, ...)
 #ifdef TRUFFLERUBY_NOKOGIRI_SYSTEM_LIBRARIES
   /* It is not currently possible to pass var args from native
      functions to sulong, so we work around the issue here. */
-  rb_message = rb_sprintf("generic_exception_pusher: %s", msg);
+  rb_message = rb_sprintf("_noko_xml_xpath_context__generic_exception_pusher: %s", msg);
 #else
   va_list args;
   va_start(args, msg);
@@ -368,58 +362,55 @@ generic_exception_pusher(void *data, const char *msg, ...)
  * a +Float+, or a boolean.
  */
 static VALUE
-rb_xml_xpath_context_evaluate(int argc, VALUE *argv, VALUE rb_context)
+noko_xml_xpath_context_evaluate(int argc, VALUE *argv, VALUE rb_context)
 {
-  VALUE search_path, xpath_handler;
-  VALUE retval = Qnil;
   xmlXPathContextPtr c_context;
-  xmlXPathObjectPtr xpath;
-  xmlChar *query;
-  VALUE errors = rb_ary_new();
+  VALUE rb_expression = Qnil;
+  VALUE rb_function_lookup_handler = Qnil;
+  xmlChar *c_expression_str = NULL;
+  VALUE rb_errors = rb_ary_new();
+  xmlXPathObjectPtr c_xpath_object;
+  VALUE rb_xpath_object = Qnil;
 
-  TypedData_Get_Struct(
-    rb_context,
-    xmlXPathContext,
-    &xml_xpath_context_type,
-    c_context
-  );
+  TypedData_Get_Struct(rb_context, xmlXPathContext, &_noko_xml_xpath_context_type, c_context);
 
-  if (rb_scan_args(argc, argv, "11", &search_path, &xpath_handler) == 1) {
-    xpath_handler = Qnil;
-  }
+  rb_scan_args(argc, argv, "11", &rb_expression, &rb_function_lookup_handler);
 
-  query = (xmlChar *)StringValueCStr(search_path);
+  c_expression_str = (xmlChar *)StringValueCStr(rb_expression);
 
-  if (Qnil != xpath_handler) {
+  if (Qnil != rb_function_lookup_handler) {
     /* FIXME: not sure if this is the correct place to shove private data. */
-    c_context->userData = (void *)xpath_handler;
+    c_context->userData = (void *)rb_function_lookup_handler;
     xmlXPathRegisterFuncLookup(
       c_context,
-      handler_lookup,
-      (void *)xpath_handler
+      _noko_xml_xpath_context_handler_lookup,
+      (void *)rb_function_lookup_handler
     );
   }
 
-  xmlSetStructuredErrorFunc((void *)errors, Nokogiri_error_array_pusher);
-  xmlSetGenericErrorFunc((void *)errors, generic_exception_pusher);
+  /* TODO: use xmlXPathSetErrorHandler (as of 2.13.0) */
+  xmlSetStructuredErrorFunc((void *)rb_errors, noko__error_array_pusher);
+  xmlSetGenericErrorFunc((void *)rb_errors, _noko_xml_xpath_context__generic_exception_pusher);
 
-  xpath = xmlXPathEvalExpression(query, c_context);
+  c_xpath_object = xmlXPathEvalExpression(c_expression_str, c_context);
 
   xmlSetStructuredErrorFunc(NULL, NULL);
   xmlSetGenericErrorFunc(NULL, NULL);
 
-  if (xpath == NULL) {
-    rb_exc_raise(rb_ary_entry(errors, 0));
+  xmlXPathRegisterFuncLookup(c_context, NULL, NULL);
+
+  if (c_xpath_object == NULL) {
+    rb_exc_raise(rb_ary_entry(rb_errors, 0));
   }
 
-  retval = xpath2ruby(xpath, c_context);
-  if (retval == Qundef) {
-    retval = noko_xml_node_set_wrap(NULL, DOC_RUBY_OBJECT(c_context->doc));
+  rb_xpath_object = _noko_xml_xpath_context__xpath2ruby(c_xpath_object, c_context);
+  if (rb_xpath_object == Qundef) {
+    rb_xpath_object = noko_xml_node_set_wrap(NULL, DOC_RUBY_OBJECT(c_context->doc));
   }
 
-  xmlXPathFreeNodeSetList(xpath);
+  xmlXPathFreeNodeSetList(c_xpath_object);
 
-  return retval;
+  return rb_xpath_object;
 }
 
 /*
@@ -429,43 +420,51 @@ rb_xml_xpath_context_evaluate(int argc, VALUE *argv, VALUE rb_context)
  * Create a new XPathContext with +node+ as the context node.
  */
 static VALUE
-rb_xml_xpath_context_new(VALUE klass, VALUE rb_node)
+noko_xml_xpath_context_new(VALUE klass, VALUE rb_node)
 {
-  xmlNodePtr node;
+  xmlNodePtr c_node;
   xmlXPathContextPtr c_context;
   VALUE rb_context;
 
-  Noko_Node_Get_Struct(rb_node, xmlNode, node);
+  Noko_Node_Get_Struct(rb_node, xmlNode, c_node);
 
 #if LIBXML_VERSION < 21000
-  /* deprecated in 40483d0 */
-  xmlXPathInit();
+  xmlXPathInit(); /* deprecated in 40483d0 */
 #endif
 
-  c_context = xmlXPathNewContext(node->doc);
-  c_context->node = node;
+  c_context = xmlXPathNewContext(c_node->doc);
+  c_context->node = c_node;
 
   xmlXPathRegisterNs(c_context, NOKOGIRI_PREFIX, NOKOGIRI_URI);
   xmlXPathRegisterNs(c_context, NOKOGIRI_BUILTIN_PREFIX, NOKOGIRI_BUILTIN_URI);
-  xmlXPathRegisterFuncNS(
-    c_context,
-    (const xmlChar *)"css-class",
-    NOKOGIRI_BUILTIN_URI,
-    xpath_builtin_css_class
-  );
-  xmlXPathRegisterFuncNS(
-    c_context,
-    (const xmlChar *)"local-name-is",
-    NOKOGIRI_BUILTIN_URI,
-    xpath_builtin_local_name_is
-  );
 
-  rb_context = TypedData_Wrap_Struct(
-                 klass,
-                 &xml_xpath_context_type,
-                 c_context
-               );
+  xmlXPathRegisterFuncNS(c_context,
+                         (const xmlChar *)"css-class", NOKOGIRI_BUILTIN_URI,
+                         noko_xml_xpath_context_xpath_func_css_class);
+  xmlXPathRegisterFuncNS(c_context,
+                         (const xmlChar *)"local-name-is", NOKOGIRI_BUILTIN_URI,
+                         noko_xml_xpath_context_xpath_func_local_name_is);
+
+  rb_context = TypedData_Wrap_Struct(klass, &_noko_xml_xpath_context_type, c_context);
+
   return rb_context;
+}
+
+
+/* :nodoc: */
+static VALUE
+noko_xml_xpath_context_set_node(VALUE rb_context, VALUE rb_node)
+{
+  xmlNodePtr c_node;
+  xmlXPathContextPtr c_context;
+
+  TypedData_Get_Struct(rb_context, xmlXPathContext, &_noko_xml_xpath_context_type, c_context);
+  Noko_Node_Get_Struct(rb_node, xmlNode, c_node);
+
+  c_context->doc = c_node->doc;
+  c_context->node = c_node;
+
+  return rb_node;
 }
 
 void
@@ -478,9 +477,10 @@ noko_init_xml_xpath_context(void)
 
   rb_undef_alloc_func(cNokogiriXmlXpathContext);
 
-  rb_define_singleton_method(cNokogiriXmlXpathContext, "new", rb_xml_xpath_context_new, 1);
+  rb_define_singleton_method(cNokogiriXmlXpathContext, "new", noko_xml_xpath_context_new, 1);
 
-  rb_define_method(cNokogiriXmlXpathContext, "evaluate", rb_xml_xpath_context_evaluate, -1);
-  rb_define_method(cNokogiriXmlXpathContext, "register_variable", rb_xml_xpath_context_register_variable, 2);
-  rb_define_method(cNokogiriXmlXpathContext, "register_ns", rb_xml_xpath_context_register_ns, 2);
+  rb_define_method(cNokogiriXmlXpathContext, "evaluate", noko_xml_xpath_context_evaluate, -1);
+  rb_define_method(cNokogiriXmlXpathContext, "register_variable", noko_xml_xpath_context_register_variable, 2);
+  rb_define_method(cNokogiriXmlXpathContext, "register_ns", noko_xml_xpath_context_register_ns, 2);
+  rb_define_method(cNokogiriXmlXpathContext, "node=", noko_xml_xpath_context_set_node, 1);
 }

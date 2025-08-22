@@ -40,7 +40,7 @@ Gem::Specification.new do |spec|
 
   spec.license = "MIT"
 
-  spec.required_ruby_version = ">= 2.7.0"
+  spec.required_ruby_version = ">= 3.1.0"
 
   spec.homepage = "https://nokogiri.org"
   spec.metadata = {
@@ -141,7 +141,7 @@ Gem::Specification.new do |spec|
     "ext/java/nokogiri/internals/c14n/InvalidCanonicalizerException.java",
     "ext/java/nokogiri/internals/c14n/NameSpaceSymbTable.java",
     "ext/java/nokogiri/internals/c14n/NodeFilter.java",
-    "ext/java/nokogiri/internals/c14n/UtfHelpper.java",
+    "ext/java/nokogiri/internals/c14n/UtfHelper.java",
     "ext/java/nokogiri/internals/c14n/XMLUtils.java",
     "ext/java/nokogiri/internals/dom2dtm/DOM2DTM.java",
     "ext/java/nokogiri/internals/dom2dtm/DOM2DTMdefaultNamespaceDeclarationNode.java",
@@ -150,9 +150,10 @@ Gem::Specification.new do |spec|
     "ext/nokogiri/html4_document.c",
     "ext/nokogiri/html4_element_description.c",
     "ext/nokogiri/html4_entity_lookup.c",
+    "ext/nokogiri/html4_sax_parser.c",
     "ext/nokogiri/html4_sax_parser_context.c",
     "ext/nokogiri/html4_sax_push_parser.c",
-    "ext/nokogiri/libxml2_backwards_compat.c",
+    "ext/nokogiri/libxml2_polyfill.c",
     "ext/nokogiri/nokogiri.c",
     "ext/nokogiri/nokogiri.h",
     "ext/nokogiri/xml_attr.c",
@@ -233,6 +234,7 @@ Gem::Specification.new do |spec|
     "lib/nokogiri/css/parser.rb",
     "lib/nokogiri/css/parser.y",
     "lib/nokogiri/css/parser_extras.rb",
+    "lib/nokogiri/css/selector_cache.rb",
     "lib/nokogiri/css/syntax_error.rb",
     "lib/nokogiri/css/tokenizer.rb",
     "lib/nokogiri/css/tokenizer.rex",
@@ -254,6 +256,7 @@ Gem::Specification.new do |spec|
     "lib/nokogiri/html4/sax/parser_context.rb",
     "lib/nokogiri/html4/sax/push_parser.rb",
     "lib/nokogiri/html5.rb",
+    "lib/nokogiri/html5/builder.rb",
     "lib/nokogiri/html5/document.rb",
     "lib/nokogiri/html5/document_fragment.rb",
     "lib/nokogiri/html5/node.rb",

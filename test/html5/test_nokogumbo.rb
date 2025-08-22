@@ -205,8 +205,10 @@ class TestHtml5Nokogumbo < Nokogiri::TestCase
     assert_raises(ArgumentError) { Nokogiri::HTML5.fragment(html) }
   end
 
+  TWO_ERROR_DOC = "<!DOCTYPE html><html><!-- <!-- --></a>"
+
   def test_parse_errors
-    doc = Nokogiri::HTML5("<!DOCTYPE html><html><!-- <!-- --></a>", max_errors: 10)
+    doc = Nokogiri::HTML5(TWO_ERROR_DOC, max_errors: 10)
     assert_equal(2, doc.errors.length)
     doc = Nokogiri::HTML5("<!DOCTYPE html><html>", max_errors: 10)
     assert_empty(doc.errors)
@@ -214,10 +216,16 @@ class TestHtml5Nokogumbo < Nokogiri::TestCase
 
   def test_max_errors
     # This document contains 2 parse errors, but we force limit to 1.
-    doc = Nokogiri::HTML5("<!DOCTYPE html><html><!-- -- --></a>", max_errors: 1)
+    doc = Nokogiri::HTML5(TWO_ERROR_DOC, max_errors: 1)
     assert_equal(1, doc.errors.length)
     doc = Nokogiri::HTML5("<!DOCTYPE html><html>", max_errors: 1)
     assert_empty(doc.errors)
+  end
+
+  def test_max_errors_with_config_block
+    # This document contains 2 parse errors, but we force limit to 1.
+    doc = Nokogiri::HTML5(TWO_ERROR_DOC) { |c| c[:max_errors] = 1 }
+    assert_equal(1, doc.errors.length)
   end
 
   def test_default_max_errors
@@ -268,6 +276,7 @@ class TestHtml5Nokogumbo < Nokogiri::TestCase
     end
 
     assert(Nokogiri::HTML5(html, max_tree_depth: depth))
+    assert(Nokogiri::HTML5(html, max_tree_depth: -1))
   end
 
   def test_max_depth_fragment
@@ -278,6 +287,7 @@ class TestHtml5Nokogumbo < Nokogiri::TestCase
     end
 
     assert(Nokogiri::HTML5.fragment(html, max_tree_depth: depth))
+    assert(Nokogiri::HTML5.fragment(html, max_tree_depth: -1))
   end
 
   def test_document_encoding
@@ -336,6 +346,15 @@ class TestHtml5Nokogumbo < Nokogiri::TestCase
     frag = Nokogiri::HTML5::DocumentFragment.parse(html)
     expected = [Nokogiri::XML::Node::COMMENT_NODE, Nokogiri::XML::Node::COMMENT_NODE]
     assert_equal(expected, frag.at_css("div").children.map(&:type))
+  end
+
+  it "raises an exception if an unexpected kwarg is provided" do
+    assert_raises(ArgumentError) do
+      Nokogiri::HTML5::Document.parse("<p>", foo: "bar")
+    end
+    assert_raises(ArgumentError) do
+      Nokogiri::HTML5::DocumentFragment.parse("<p>", Encoding::UTF_8, foo: "bar")
+    end
   end
 
   private

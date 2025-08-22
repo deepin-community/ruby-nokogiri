@@ -20,11 +20,10 @@ rb_xml_cdata_s_new(int argc, VALUE *argv, VALUE klass)
   VALUE rb_content;
   VALUE rb_rest;
   VALUE rb_node;
-  xmlChar *c_content = NULL;
-  int c_content_len = 0;
 
   rb_scan_args(argc, argv, "2*", &rb_document, &rb_content, &rb_rest);
 
+  Check_Type(rb_content, T_STRING);
   if (!rb_obj_is_kind_of(rb_document, cNokogiriXmlNode)) {
     rb_raise(rb_eTypeError,
              "expected first parameter to be a Nokogiri::XML::Document, received %"PRIsVALUE,
@@ -33,23 +32,15 @@ rb_xml_cdata_s_new(int argc, VALUE *argv, VALUE klass)
 
   if (!rb_obj_is_kind_of(rb_document, cNokogiriXmlDocument)) {
     xmlNodePtr deprecated_node_type_arg;
-    // TODO: deprecate allowing Node
-    NOKO_WARN_DEPRECATION("Passing a Node as the first parameter to CDATA.new is deprecated. Please pass a Document instead. This will become an error in a future release of Nokogiri.");
+    NOKO_WARN_DEPRECATION("Passing a Node as the first parameter to CDATA.new is deprecated. Please pass a Document instead. This will become an error in Nokogiri v1.17.0."); // TODO: deprecated in v1.15.3, remove in v1.17.0
     Noko_Node_Get_Struct(rb_document, xmlNode, deprecated_node_type_arg);
     c_document = deprecated_node_type_arg->doc;
   } else {
     c_document = noko_xml_document_unwrap(rb_document);
   }
 
-  if (!NIL_P(rb_content)) {
-    c_content = (xmlChar *)StringValuePtr(rb_content);
-    c_content_len = RSTRING_LENINT(rb_content);
-  }
-
-  c_node = xmlNewCDataBlock(c_document, c_content, c_content_len);
-
+  c_node = xmlNewCDataBlock(c_document, (xmlChar *)StringValueCStr(rb_content), RSTRING_LENINT(rb_content));
   noko_xml_document_pin_node(c_node);
-
   rb_node = noko_xml_node_wrap(klass, c_node);
   rb_obj_call_init(rb_node, argc, argv);
 

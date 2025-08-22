@@ -780,6 +780,15 @@ typedef struct GumboInternalOptions {
    * Default: `false`.
    */
   bool fragment_context_has_form_ancestor;
+
+  /**
+   * Parse `noscript` elements as if scripting was enabled. This causes the
+   * contents of the `noscript` element to be parsed as raw text, rather
+   * than as HTML elements.
+   * 
+   * Default: `false`.
+   */
+  bool parse_noscript_content_as_text;
 } GumboOptions;
 
 /** Default options struct; use this with gumbo_parse_with_options. */
@@ -791,7 +800,7 @@ extern const GumboOptions kGumboDefaultOptions;
  */
 typedef enum {
   /**
-   * Indicates that parsing completed successfuly. The resulting tree
+   * Indicates that parsing completed successfully. The resulting tree
    * will be a complete document.
    */
   GUMBO_STATUS_OK,
@@ -841,7 +850,7 @@ typedef struct GumboInternalOutput {
   GumboVector /* GumboError */ errors;
 
   /**
-   * True if the parser encounted an error.
+   * True if the parser encountered an error.
    *
    * This can be true and `errors` an empty `GumboVector` if the `max_errors`
    * option was set to 0.

@@ -37,30 +37,6 @@ VALUE cNokogiriHtml5Document;
 static ID internal_subset;
 static ID parent;
 
-/* Backwards compatibility to Ruby 2.1.0 */
-#if RUBY_API_VERSION_CODE < 20200
-#define ONIG_ESCAPE_UCHAR_COLLISION 1
-#include <ruby/encoding.h>
-
-static VALUE
-rb_utf8_str_new(const char *str, long length)
-{
-  return rb_enc_str_new(str, length, rb_utf8_encoding());
-}
-
-static VALUE
-rb_utf8_str_new_cstr(const char *str)
-{
-  return rb_enc_str_new_cstr(str, rb_utf8_encoding());
-}
-
-static VALUE
-rb_utf8_str_new_static(const char *str, long length)
-{
-  return rb_enc_str_new(str, length, rb_utf8_encoding());
-}
-#endif
-
 #include <nokogiri.h>
 #include <libxml/tree.h>
 #include <libxml/HTMLtree.h>
@@ -94,7 +70,7 @@ perform_parse(const GumboOptions *options, VALUE input)
   GumboOutput *output = gumbo_parse_with_options(
                           options,
                           RSTRING_PTR(input),
-                          RSTRING_LEN(input)
+                          (size_t)RSTRING_LEN(input)
                         );
 
   const char *status_string = gumbo_status_to_string(output->status);
@@ -260,7 +236,7 @@ static void
 add_errors(const GumboOutput *output, VALUE rdoc, VALUE input, VALUE url)
 {
   const char *input_str = RSTRING_PTR(input);
-  size_t input_len = RSTRING_LEN(input);
+  size_t input_len = (size_t)RSTRING_LEN(input);
 
   // Add parse errors to rdoc.
   if (output->errors.length) {
@@ -272,11 +248,11 @@ add_errors(const GumboOutput *output, VALUE rdoc, VALUE input, VALUE url)
       GumboSourcePosition position = gumbo_error_position(err);
       char *msg;
       size_t size = gumbo_caret_diagnostic_to_string(err, input_str, input_len, &msg);
-      VALUE err_str = rb_utf8_str_new(msg, size);
+      VALUE err_str = rb_utf8_str_new(msg, (int)size);
       free(msg);
       VALUE syntax_error = rb_class_new_instance(1, &err_str, cNokogiriXmlSyntaxError);
       const char *error_code = gumbo_error_code(err);
-      VALUE str1 = error_code ? rb_utf8_str_new_static(error_code, strlen(error_code)) : Qnil;
+      VALUE str1 = error_code ? rb_utf8_str_new_static(error_code, (int)strlen(error_code)) : Qnil;
       rb_iv_set(syntax_error, "@domain", INT2NUM(1)); // XML_FROM_PARSER
       rb_iv_set(syntax_error, "@code", INT2NUM(1));   // XML_ERR_INTERNAL_ERROR
       rb_iv_set(syntax_error, "@level", INT2NUM(2));  // XML_ERR_ERROR
@@ -316,18 +292,58 @@ parse_cleanup(VALUE parse_args)
   return Qnil;
 }
 
+// Scan the keyword arguments for options common to the document and fragment
+// parse.
+static GumboOptions
+common_options(VALUE kwargs)
+{
+  // The order of the keywords determines the order of the values below.
+  // If this order is changed, then setting the options below must change as
+  // well.
+  ID keywords[] = {
+    // Required keywords.
+    rb_intern_const("max_attributes"),
+    rb_intern_const("max_errors"),
+    rb_intern_const("max_tree_depth"),
+
+    // Optional keywords.
+    rb_intern_const("parse_noscript_content_as_text"),
+  };
+  VALUE values[sizeof keywords / sizeof keywords[0]];
+
+  // Extract the values coresponding to the required keywords. Raise an error
+  // if required arguments are missing.
+  rb_get_kwargs(kwargs, keywords, 3, 1, values);
+
+  GumboOptions options = kGumboDefaultOptions;
+  options.max_attributes = NUM2INT(values[0]);
+  options.max_errors = NUM2INT(values[1]);
+
+  // handle negative values
+  int depth = NUM2INT(values[2]);
+  options.max_tree_depth = depth < 0 ? UINT_MAX : (unsigned int)depth;
+
+  options.parse_noscript_content_as_text = values[3] != Qundef && RTEST(values[3]);
+
+  return options;
+}
+
 static VALUE parse_continue(VALUE parse_args);
 
 /*
  *  @!visibility protected
  */
 static VALUE
-parse(VALUE self, VALUE input, VALUE url, VALUE max_attributes, VALUE max_errors, VALUE max_depth, VALUE klass)
+noko_gumbo_s_parse(int argc, VALUE *argv, VALUE _self)
 {
-  GumboOptions options = kGumboDefaultOptions;
-  options.max_attributes = NUM2INT(max_attributes);
-  options.max_errors = NUM2INT(max_errors);
-  options.max_tree_depth = NUM2INT(max_depth);
+  VALUE input, url, klass, kwargs;
+
+  rb_scan_args(argc, argv, "3:", &input, &url, &klass, &kwargs);
+  if (NIL_P(kwargs)) {
+    kwargs = rb_hash_new();
+  }
+
+  GumboOptions options = common_options(kwargs);
 
   GumboOutput *output = perform_parse(&options, input);
   ParseArgs args = {
@@ -383,7 +399,7 @@ lookup_namespace(VALUE node, bool require_known_ns)
   Check_Type(ns, T_STRING);
 
   const char *href_ptr = RSTRING_PTR(ns);
-  size_t href_len = RSTRING_LEN(ns);
+  size_t href_len = (size_t)RSTRING_LEN(ns);
 #define NAMESPACE_P(uri) (href_len == sizeof uri - 1 && !memcmp(href_ptr, uri, href_len))
   if (NAMESPACE_P("http://www.w3.org/1999/xhtml")) {
     return GUMBO_NAMESPACE_HTML;
@@ -415,16 +431,12 @@ static VALUE fragment_continue(VALUE parse_args);
  *  @!visibility protected
  */
 static VALUE
-fragment(
-  VALUE self,
-  VALUE doc_fragment,
-  VALUE tags,
-  VALUE ctx,
-  VALUE max_attributes,
-  VALUE max_errors,
-  VALUE max_depth
-)
+noko_gumbo_s_fragment(int argc, VALUE *argv, VALUE _self)
 {
+  VALUE doc_fragment;
+  VALUE tags;
+  VALUE ctx;
+  VALUE kwargs;
   ID name = rb_intern_const("name");
   const char *ctx_tag;
   GumboNamespaceEnum ctx_ns;
@@ -432,13 +444,20 @@ fragment(
   bool form = false;
   const char *encoding = NULL;
 
+  rb_scan_args(argc, argv, "3:", &doc_fragment, &tags, &ctx, &kwargs);
+  if (NIL_P(kwargs)) {
+    kwargs = rb_hash_new();
+  }
+
+  GumboOptions options = common_options(kwargs);
+
   if (NIL_P(ctx)) {
     ctx_tag = "body";
     ctx_ns = GUMBO_NAMESPACE_HTML;
   } else if (TYPE(ctx) == T_STRING) {
     ctx_tag = StringValueCStr(ctx);
     ctx_ns = GUMBO_NAMESPACE_HTML;
-    size_t len = RSTRING_LEN(ctx);
+    size_t len = (size_t)RSTRING_LEN(ctx);
     const char *colon = memchr(ctx_tag, ':', len);
     if (colon) {
       switch (colon - ctx_tag) {
@@ -519,7 +538,7 @@ error:
   VALUE doc = rb_funcall(doc_fragment, rb_intern_const("document"), 0);
   VALUE dtd = rb_funcall(doc, internal_subset, 0);
   VALUE doc_quirks_mode = rb_iv_get(doc, "@quirks_mode");
-  if (NIL_P(ctx) || NIL_P(doc_quirks_mode)) {
+  if (NIL_P(ctx) || (TYPE(ctx) == T_STRING) || NIL_P(doc_quirks_mode)) {
     quirks_mode = GUMBO_DOCTYPE_NO_QUIRKS;
   } else if (NIL_P(dtd)) {
     quirks_mode = GUMBO_DOCTYPE_QUIRKS;
@@ -535,17 +554,14 @@ error:
   }
 
   // Perform a fragment parse.
-  int depth = NUM2INT(max_depth);
-  GumboOptions options = kGumboDefaultOptions;
-  options.max_attributes = NUM2INT(max_attributes);
-  options.max_errors = NUM2INT(max_errors);
-  // Add one to account for the HTML element.
-  options.max_tree_depth = depth < 0 ? -1 : (depth + 1);
   options.fragment_context = ctx_tag;
   options.fragment_namespace = ctx_ns;
   options.fragment_encoding = encoding;
   options.quirks_mode = quirks_mode;
   options.fragment_context_has_form_ancestor = form;
+
+  // Add one to the max tree depth to account for the HTML element.
+  if (options.max_tree_depth < UINT_MAX) { options.max_tree_depth++; }
 
   GumboOutput *output = perform_parse(&options, tags);
   ParseArgs args = {
@@ -587,8 +603,8 @@ noko_init_gumbo(void)
   parent = rb_intern_const("parent");
 
   // Define Nokogumbo module with parse and fragment methods.
-  rb_define_singleton_method(mNokogiriGumbo, "parse", parse, 6);
-  rb_define_singleton_method(mNokogiriGumbo, "fragment", fragment, 6);
+  rb_define_singleton_method(mNokogiriGumbo, "parse", noko_gumbo_s_parse, -1);
+  rb_define_singleton_method(mNokogiriGumbo, "fragment", noko_gumbo_s_fragment, -1);
 }
 
 // vim: set shiftwidth=2 softtabstop=2 tabstop=8 expandtab:

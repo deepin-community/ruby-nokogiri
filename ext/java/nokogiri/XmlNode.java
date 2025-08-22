@@ -287,7 +287,7 @@ public class XmlNode extends RubyObject
    * args but not for an exact number.  Any extra args will then be
    * passed to 'initialize'.  The way 'new' and this 'init' function
    * interact means that subclasses cannot arbitrarily change the
-   * require aruments by defining an 'initialize' method.  This is
+   * require arguments by defining an 'initialize' method.  This is
    * how the C libxml wrapper works also.
    *
    * As written it performs initialization for a new Element with
@@ -311,8 +311,7 @@ public class XmlNode extends RubyObject
       throw context.runtime.newArgumentError("document must be a Nokogiri::XML::Node");
     }
     if (!(doc instanceof XmlDocument)) {
-      // TODO: deprecate allowing Node
-      context.runtime.getWarnings().warn("Passing a Node as the second parameter to Node.new is deprecated. Please pass a Document instead, or prefer an alternative constructor like Node#add_child. This will become an error in a future release of Nokogiri.");
+      context.runtime.getWarnings().warn("Passing a Node as the second parameter to Node.new is deprecated. Please pass a Document instead, or prefer an alternative constructor like Node#add_child. This will become an error in Nokogiri v1.17.0."); // TODO: deprecated in v1.13.0, remove in v1.17.0
     }
 
     Document document = asXmlNode(context, doc).getOwnerDocument();
@@ -408,7 +407,7 @@ public class XmlNode extends RubyObject
   /**
    * This method should be called after a node has been adopted in a new
    * document. This method will ensure that the node is renamed with the
-   * appriopriate NS uri. First the prefix of the node is extracted, then is
+   * appropriate NS uri. First the prefix of the node is extracted, then is
    * used to lookup the namespace uri in the new document starting at the
    * current node and traversing the ancestors. If the namespace uri wasn't
    * empty (or null) all children and the node has attributes and/or children
@@ -644,12 +643,22 @@ public class XmlNode extends RubyObject
 
   @JRubyMethod(name = {"attribute", "attr"})
   public IRubyObject
-  attribute(ThreadContext context, IRubyObject name)
+  attribute(ThreadContext context, IRubyObject rbName)
   {
-    NamedNodeMap attrs = this.node.getAttributes();
-    Node attr = attrs.getNamedItem(rubyStringToString(name));
-    if (attr == null) { return context.nil; }
-    return getCachedNodeOrCreate(context.runtime, attr);
+    NamedNodeMap attributes = this.node.getAttributes();
+    String name = rubyStringToString(rbName);
+
+    for (int j = 0 ; j < attributes.getLength() ; j++) {
+      Node attribute = attributes.item(j);
+      String localName = attribute.getLocalName();
+      if (localName == null) {
+        continue;
+      }
+      if (localName.equals(name)) {
+        return getCachedNodeOrCreate(context.runtime, attribute);
+      }
+    }
+    return context.nil;
   }
 
   @JRubyMethod
@@ -967,45 +976,14 @@ public class XmlNode extends RubyObject
     return doc;
   }
 
+  @JRubyMethod(visibility = Visibility.PROTECTED)
   public IRubyObject
-  dup()
+  initialize_copy_with_args(ThreadContext context, IRubyObject other, IRubyObject level, IRubyObject document)
   {
-    return dup_implementation(getMetaClass().getClassRuntime(), true);
-  }
-
-  @JRubyMethod
-  public IRubyObject
-  dup(ThreadContext context)
-  {
-    return dup_implementation(context, true);
-  }
-
-  @JRubyMethod
-  public IRubyObject
-  dup(ThreadContext context, IRubyObject depth)
-  {
-    boolean deep = depth instanceof RubyInteger && RubyFixnum.fix2int(depth) != 0;
-    return dup_implementation(context, deep);
-  }
-
-  protected final IRubyObject
-  dup_implementation(ThreadContext context, boolean deep)
-  {
-    return dup_implementation(context.runtime, deep);
-  }
-
-  protected IRubyObject
-  dup_implementation(Ruby runtime, boolean deep)
-  {
-    XmlNode clone;
-    try {
-      clone = (XmlNode) clone();
-    } catch (CloneNotSupportedException e) {
-      throw runtime.newRuntimeError(e.toString());
-    }
-    Node newNode = node.cloneNode(deep);
-    clone.node = newNode;
-    return clone;
+    boolean deep = level instanceof RubyInteger && RubyFixnum.fix2int(level) != 0;
+    this.node = asXmlNode(context, other).node.cloneNode(deep);
+    setDocument(context, (XmlDocument)document);
+    return this;
   }
 
   public static RubyString
@@ -1448,11 +1426,12 @@ public class XmlNode extends RubyObject
       }
     }
 
-    if (uri != null) {
-      element.setAttributeNS(uri, key, val);
-    } else {
+    if (colonIndex > 0 && uri == null) {
       element.setAttribute(key, val);
+    } else {
+      element.setAttributeNS(uri, key, val);
     }
+
     clearXpathContext(node);
   }
 

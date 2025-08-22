@@ -42,6 +42,22 @@ class TestHtml5API < Nokogiri::TestCase
 
     doc = Nokogiri::HTML5(html, url, max_errors: 1)
     assert_equal(url, doc.errors[0].file)
+
+    # with keyword args
+    doc = Nokogiri::HTML5::Document.parse(html, url: nil)
+    assert_nil(doc.url)
+
+    doc = Nokogiri::HTML5::Document.parse(html, url: url)
+    assert_equal(url, doc.url)
+
+    doc = Nokogiri::HTML5::Document.parse(html, url: url, max_errors: 1)
+    assert_equal(url, doc.errors[0].file)
+
+    doc = Nokogiri::HTML5.parse(html, url: url, max_errors: 1)
+    assert_equal(url, doc.errors[0].file)
+
+    doc = Nokogiri::HTML5(html, url: url, max_errors: 1)
+    assert_equal(url, doc.errors[0].file)
   end
 
   def test_parse_encoding
@@ -57,6 +73,11 @@ class TestHtml5API < Nokogiri::TestCase
     assert_match(/おはようございます/, Nokogiri::HTML5(raw, nil, Encoding::SHIFT_JIS).to_s)
     assert_match(/おはようございます/, Nokogiri::HTML5.parse(raw, nil, Encoding::SHIFT_JIS).to_s)
     assert_match(/おはようございます/, Nokogiri::HTML5::Document.parse(raw, nil, Encoding::SHIFT_JIS).to_s)
+
+    # with kwargs
+    assert_match(/おはようございます/, Nokogiri::HTML5(raw, encoding: Encoding::SHIFT_JIS).to_s)
+    assert_match(/おはようございます/, Nokogiri::HTML5.parse(raw, encoding: Encoding::SHIFT_JIS).to_s)
+    assert_match(/おはようございます/, Nokogiri::HTML5::Document.parse(raw, encoding: Encoding::SHIFT_JIS).to_s)
   end
 
   def test_fragment_encoding
@@ -71,6 +92,10 @@ class TestHtml5API < Nokogiri::TestCase
 
     assert_match(/おはようございます/, Nokogiri::HTML5.fragment(raw, Encoding::SHIFT_JIS).to_s)
     assert_match(/おはようございます/, Nokogiri::HTML5::DocumentFragment.parse(raw, Encoding::SHIFT_JIS).to_s)
+
+    # with kwargs
+    assert_match(/おはようございます/, Nokogiri::HTML5.fragment(raw, encoding: Encoding::SHIFT_JIS).to_s)
+    assert_match(/おはようございます/, Nokogiri::HTML5::DocumentFragment.parse(raw, encoding: Encoding::SHIFT_JIS).to_s)
   end
 
   def test_fragment_serialization_encoding
@@ -102,6 +127,75 @@ class TestHtml5API < Nokogiri::TestCase
     doc2 = Nokogiri::HTML5(doc.serialize(encoding: "Big5"))
     html2 = doc2.serialize(encoding: "UTF-8")
     assert_match("ฉันไม่พูดภาษาไทย", html2)
+  end
+
+  def test_parse_noscript_as_elements_in_head
+    # <img> isn't allowed in noscript so the noscript element is popped off
+    # the stack of open elements and the <img> token is reprocessed in `head`
+    # which causes the `head` element to be popped off the stack of open
+    # elements and a `body` element to be inserted. Then the `img` element is
+    # inserted in the body.
+    html = "<!DOCTYPE html><head><noscript><img src=!></noscript></head>"
+    doc = Nokogiri::HTML5(html, parse_noscript_content_as_text: false, max_errors: 100)
+    noscript = doc.at("/html/head/noscript")
+    assert_equal(3, doc.errors.length, doc.errors.join("\n"))
+    # Start tag 'img' isn't allowed here
+    # End tag 'noscript' isn't allowed here
+    # End tag head isn't allowed here
+    assert_empty(noscript.children)
+    img = doc.at("/html/body/img")
+    refute_nil(img)
+  end
+
+  def test_parse_noscript_as_text_in_head
+    # In contrast to the previous test, when the scripting flag is enabled, the content
+    # of the noscript element is parsed as raw text.
+    html = "<!DOCTYPE html><head><noscript><img src=!></noscript></head>"
+    doc = Nokogiri::HTML5(html, parse_noscript_content_as_text: true, max_errors: 100)
+    noscript = doc.at("/html/head/noscript")
+    assert_empty(doc.errors)
+    assert_equal(1, noscript.children.length)
+    assert_kind_of(Nokogiri::XML::Text, noscript.children.first)
+  end
+
+  def test_parse_noscript_as_elements_in_body
+    html = "<!DOCTYPE html><body><noscript><img src=!></noscript></body>"
+    doc = Nokogiri::HTML5(html, parse_noscript_content_as_text: false, max_errors: 100)
+    assert_empty(doc.errors)
+    img = doc.at("/html/body/noscript/img")
+    refute_nil(img)
+  end
+
+  def test_parse_noscript_as_text_in_body
+    html = "<!DOCTYPE html><body><noscript><img src=!></noscript></body>"
+    doc = Nokogiri::HTML5(html, parse_noscript_content_as_text: true, max_errors: 100)
+    noscript = doc.at("/html/body/noscript")
+    assert_empty(doc.errors, doc.errors.join("\n"))
+    assert_equal(1, noscript.children.length)
+    assert_kind_of(Nokogiri::XML::Text, noscript.children.first)
+  end
+
+  def test_parse_noscript_fragment_as_elements
+    html = "<meta charset='UTF-8'><link rel=stylesheet href=!>"
+    frag = Nokogiri::HTML5::DocumentFragment.new(Nokogiri::HTML5::Document.new, html, "noscript", parse_noscript_content_as_text: false, max_errors: 100)
+    assert_empty(frag.errors)
+    assert_equal(2, frag.children.length)
+  end
+
+  def test_parse_noscript_fragment_as_text
+    html = "<meta charset='UTF-8'><link rel=stylesheet href=!>"
+    frag = Nokogiri::HTML5::DocumentFragment.new(Nokogiri::HTML5::Document.new, html, "noscript", parse_noscript_content_as_text: true, max_errors: 100)
+    assert_empty(frag.errors)
+    assert_equal(1, frag.children.length)
+    assert_kind_of(Nokogiri::XML::Text, frag.children.first)
+  end
+
+  def test_parse_noscript_content_default
+    html = "<!DOCTYPE html><body><noscript><img src=!></noscript></body>"
+    doc = Nokogiri::HTML5(html, max_errors: 100)
+    assert_empty(doc.errors)
+    img = doc.at("/html/body/noscript/img")
+    refute_nil(img)
   end
 
   ["pre", "listing", "textarea"].each do |tag|
@@ -164,7 +258,7 @@ class TestHtml5API < Nokogiri::TestCase
     span = doc.at_xpath("/html/body/form/span")
     refute_nil(span)
     frag = span.fragment("<form>Nested forms should be ignored</form>")
-    assert(frag.is_a?(Nokogiri::HTML5::DocumentFragment))
+    assert_kind_of(Nokogiri::HTML5::DocumentFragment, frag)
     assert_equal(1, frag.children.length)
     nested_form = frag.at_xpath("form")
     assert_nil(nested_form)
@@ -176,7 +270,7 @@ class TestHtml5API < Nokogiri::TestCase
     span = doc.at_xpath("/html/body/span")
     refute_nil(span)
     frag = span.fragment("<form><span>Form should not be ignored</span></form>")
-    assert(frag.is_a?(Nokogiri::HTML5::DocumentFragment))
+    assert_kind_of(Nokogiri::HTML5::DocumentFragment, frag)
     assert_equal(1, frag.children.length)
     form = frag.at_xpath("form")
     refute_nil(form)
@@ -185,7 +279,7 @@ class TestHtml5API < Nokogiri::TestCase
   def test_empty_fragment
     doc = Nokogiri.HTML5("<!DOCTYPE html><body>")
     frag = doc.fragment
-    assert(frag.is_a?(Nokogiri::HTML5::DocumentFragment))
+    assert_kind_of(Nokogiri::HTML5::DocumentFragment, frag)
     assert_empty(frag.children)
   end
 
@@ -236,6 +330,21 @@ class TestHtml5API < Nokogiri::TestCase
     el.wrap("<optgroup></optgroup>")
     assert_equal("optgroup", el.parent.name)
     assert_equal("select", el.parent.parent.name)
+  end
+
+  def test_parse_in_context_of_foreign_namespace
+    # https://github.com/sparklemotion/nokogiri/issues/3112
+    # https://gitlab.gnome.org/GNOME/libxml2/-/issues/672
+    # released upstream in v2.12.5
+    skip if Nokogiri.uses_libxml?(["~> 2.12.0", "< 2.12.5"])
+
+    doc = Nokogiri::HTML5::Document.parse("<html><body><math>")
+    math = doc.at_css("math")
+
+    nodes = math.parse("mrow") # segfaults in libxml 2.12 before 95f2a174
+
+    assert_kind_of(Nokogiri::XML::NodeSet, nodes)
+    assert_equal(1, nodes.length)
   end
 
   describe Nokogiri::HTML5::Document do
@@ -314,14 +423,50 @@ class TestHtml5API < Nokogiri::TestCase
   end
 
   describe Nokogiri::HTML5::DocumentFragment do
+    describe "passing in context node" do
+      it "to DocumentFragment.new" do
+        fragment = Nokogiri::HTML5::DocumentFragment.new(
+          Nokogiri::HTML5::Document.new,
+          "<body><div>foo</div></body>",
+          "html",
+        )
+        assert_match(/<body>/, fragment.to_s)
+        assert_match(/<head>/, fragment.to_s)
+      end
+
+      describe "to DocumentFragment.parse" do
+        it "as an options hash" do
+          fragment = Nokogiri::HTML5::DocumentFragment.parse(
+            "<body><div>foo</div></body>",
+            nil,
+            { context: "html" },
+          )
+          assert_match(/<body>/, fragment.to_s)
+          assert_match(/<head>/, fragment.to_s)
+        end
+
+        it "as keyword argument" do
+          fragment = Nokogiri::HTML5::DocumentFragment.parse("<body><div>foo</div></body>", context: "html")
+          assert_match(/<body>/, fragment.to_s)
+          assert_match(/<head>/, fragment.to_s)
+        end
+      end
+
+      it "to HTML5.fragment" do
+        fragment = Nokogiri::HTML5.fragment("<body><div>foo</div></body>", context: "html")
+        assert_match(/<body>/, fragment.to_s)
+        assert_match(/<head>/, fragment.to_s)
+      end
+    end
+
     describe "subclassing" do
       let(:klass) do
         Class.new(Nokogiri::HTML5::DocumentFragment) do
           attr_accessor :initialized_with, :initialized_count
 
-          def initialize(*args)
+          def initialize(*args, **kwargs)
             super
-            @initialized_with = args
+            @initialized_with = [args, **kwargs]
             @initialized_count ||= 0
             @initialized_count += 1
           end
@@ -341,8 +486,11 @@ class TestHtml5API < Nokogiri::TestCase
         end
 
         it "passes args to #initialize" do
-          fragment = klass.new(html, "<div>a</div>")
-          assert_equal([html, "<div>a</div>"], fragment.initialized_with)
+          fragment = klass.new(html, "<div>a</div>", max_errors: 1)
+          assert_equal(
+            [[html, "<div>a</div>"], { max_errors: 1 }],
+            fragment.initialized_with,
+          )
         end
       end
 

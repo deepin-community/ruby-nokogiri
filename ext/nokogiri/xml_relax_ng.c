@@ -3,28 +3,22 @@
 VALUE cNokogiriXmlRelaxNG;
 
 static void
-xml_relax_ng_deallocate(void *data)
+_noko_xml_relax_ng_deallocate(void *data)
 {
   xmlRelaxNGPtr schema = data;
   xmlRelaxNGFree(schema);
 }
 
 static const rb_data_type_t xml_relax_ng_type = {
-  .wrap_struct_name = "Nokogiri::XML::RelaxNG",
+  .wrap_struct_name = "xmlRelaxNG",
   .function = {
-    .dfree = xml_relax_ng_deallocate,
+    .dfree = _noko_xml_relax_ng_deallocate,
   },
   .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED,
 };
 
-/*
- * call-seq:
- *  validate_document(document)
- *
- * Validate a Nokogiri::XML::Document against this RelaxNG schema.
- */
 static VALUE
-validate_document(VALUE self, VALUE document)
+noko_xml_relax_ng__validate_document(VALUE self, VALUE document)
 {
   xmlDocPtr doc;
   xmlRelaxNGPtr schema;
@@ -43,13 +37,11 @@ validate_document(VALUE self, VALUE document)
     rb_raise(rb_eRuntimeError, "Could not create a validation context");
   }
 
-#ifdef HAVE_XMLRELAXNGSETVALIDSTRUCTUREDERRORS
   xmlRelaxNGSetValidStructuredErrors(
     valid_ctxt,
-    Nokogiri_error_array_pusher,
+    noko__error_array_pusher,
     (void *)errors
   );
-#endif
 
   xmlRelaxNGValidateDoc(valid_ctxt, doc);
 
@@ -59,8 +51,8 @@ validate_document(VALUE self, VALUE document)
 }
 
 static VALUE
-xml_relax_ng_parse_schema(
-  VALUE klass,
+_noko_xml_relax_ng_parse_schema(
+  VALUE rb_class,
   xmlRelaxNGParserCtxtPtr c_parser_context,
   VALUE rb_parse_options
 )
@@ -68,6 +60,7 @@ xml_relax_ng_parse_schema(
   VALUE rb_errors;
   VALUE rb_schema;
   xmlRelaxNGPtr c_schema;
+  libxmlStructuredErrorHandlerState handler_state;
 
   if (NIL_P(rb_parse_options)) {
     rb_parse_options = rb_const_get_at(
@@ -77,33 +70,30 @@ xml_relax_ng_parse_schema(
   }
 
   rb_errors = rb_ary_new();
-  xmlSetStructuredErrorFunc((void *)rb_errors, Nokogiri_error_array_pusher);
 
-#ifdef HAVE_XMLRELAXNGSETPARSERSTRUCTUREDERRORS
+  noko__structured_error_func_save_and_set(&handler_state, (void *)rb_errors, noko__error_array_pusher);
   xmlRelaxNGSetParserStructuredErrors(
     c_parser_context,
-    Nokogiri_error_array_pusher,
+    noko__error_array_pusher,
     (void *)rb_errors
   );
-#endif
 
   c_schema = xmlRelaxNGParse(c_parser_context);
 
-  xmlSetStructuredErrorFunc(NULL, NULL);
   xmlRelaxNGFreeParserCtxt(c_parser_context);
+  noko__structured_error_func_restore(&handler_state);
 
   if (NULL == c_schema) {
-    xmlErrorPtr error = xmlGetLastError();
-    if (error) {
-      Nokogiri_error_raise(NULL, error);
+    VALUE exception = rb_funcall(cNokogiriXmlSyntaxError, rb_intern("aggregate"), 1, rb_errors);
+
+    if (RB_TEST(exception)) {
+      rb_exc_raise(exception);
     } else {
       rb_raise(rb_eRuntimeError, "Could not parse document");
     }
-
-    return Qnil;
   }
 
-  rb_schema = TypedData_Wrap_Struct(klass, &xml_relax_ng_type, c_schema);
+  rb_schema = TypedData_Wrap_Struct(rb_class, &xml_relax_ng_type, c_schema);
   rb_iv_set(rb_schema, "@errors", rb_errors);
   rb_iv_set(rb_schema, "@parse_options", rb_parse_options);
 
@@ -111,37 +101,27 @@ xml_relax_ng_parse_schema(
 }
 
 /*
- * call-seq:
- *  read_memory(string)
+ * :call-seq:
+ *   from_document(document) → Nokogiri::XML::RelaxNG
+ *   from_document(document, parse_options) → Nokogiri::XML::RelaxNG
  *
- * Create a new RelaxNG from the contents of +string+
+ * Parse a RELAX NG schema definition from a Document to create a new Nokogiri::XML::RelaxNG.
+ *
+ * [Parameters]
+ * - +document+ (XML::Document) A document containing the RELAX NG schema definition
+ * - +parse_options+ (Nokogiri::XML::ParseOptions)
+ *   Defaults to ParseOptions::DEFAULT_SCHEMA ⚠ Unused
+ *
+ * [Returns] Nokogiri::XML::RelaxNG
+ *
+ * ⚠ +parse_options+ is currently unused by this method and is present only as a placeholder for
+ * future functionality.
  */
 static VALUE
-read_memory(int argc, VALUE *argv, VALUE klass)
+noko_xml_relax_ng_s_from_document(int argc, VALUE *argv, VALUE rb_class)
 {
-  VALUE rb_content;
-  VALUE rb_parse_options;
-  xmlRelaxNGParserCtxtPtr c_parser_context;
-
-  rb_scan_args(argc, argv, "11", &rb_content, &rb_parse_options);
-
-  c_parser_context = xmlRelaxNGNewMemParserCtxt(
-                       (const char *)StringValuePtr(rb_content),
-                       (int)RSTRING_LEN(rb_content)
-                     );
-
-  return xml_relax_ng_parse_schema(klass, c_parser_context, rb_parse_options);
-}
-
-/*
- * call-seq:
- *  from_document(doc)
- *
- * Create a new RelaxNG schema from the Nokogiri::XML::Document +doc+
- */
-static VALUE
-from_document(int argc, VALUE *argv, VALUE klass)
-{
+  /* TODO: deprecate this method and put file-or-string logic into .new so that becomes the
+   * preferred entry point, and this can become a private method */
   VALUE rb_document;
   VALUE rb_parse_options;
   xmlDocPtr c_document;
@@ -154,7 +134,7 @@ from_document(int argc, VALUE *argv, VALUE klass)
 
   c_parser_context = xmlRelaxNGNewDocParserCtxt(c_document);
 
-  return xml_relax_ng_parse_schema(klass, c_parser_context, rb_parse_options);
+  return _noko_xml_relax_ng_parse_schema(rb_class, c_parser_context, rb_parse_options);
 }
 
 void
@@ -163,8 +143,7 @@ noko_init_xml_relax_ng(void)
   assert(cNokogiriXmlSchema);
   cNokogiriXmlRelaxNG = rb_define_class_under(mNokogiriXml, "RelaxNG", cNokogiriXmlSchema);
 
-  rb_define_singleton_method(cNokogiriXmlRelaxNG, "read_memory", read_memory, -1);
-  rb_define_singleton_method(cNokogiriXmlRelaxNG, "from_document", from_document, -1);
+  rb_define_singleton_method(cNokogiriXmlRelaxNG, "from_document", noko_xml_relax_ng_s_from_document, -1);
 
-  rb_define_private_method(cNokogiriXmlRelaxNG, "validate_document", validate_document, 1);
+  rb_define_private_method(cNokogiriXmlRelaxNG, "validate_document", noko_xml_relax_ng__validate_document, 1);
 }

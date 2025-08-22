@@ -22,7 +22,6 @@ require "bundler/inline"
 gemfile do
   source "https://rubygems.org"
   gem "minitest"
-  gem "minitest-reporters"
   gem "nokogiri"
 end
 
@@ -39,8 +38,6 @@ if ARGV.include?("-v")
 end
 
 require "minitest/autorun"
-require "minitest/reporters"
-Minitest::Reporters.use!([Minitest::Reporters::SpecReporter.new])
 
 puts "Testing #{gemspec.full_name} installed in #{gemspec.base_dir}"
 describe gemspec.full_name do
@@ -89,16 +86,7 @@ describe gemspec.full_name do
 
     describe "library" do
       describe "packaged" do
-        describe "for nokogumbo" do
-          # this is for nokogumbo and shouldn't be forever
-          it "declares where headers are installed" do
-            assert_equal(
-              nokogiri_ext_dir,
-              Nokogiri::VERSION_INFO["libxml"]["libxml2_path"],
-              "expected Nokogiri::VERSION_INFO to point to #{nokogiri_ext_dir}",
-            )
-          end
-
+        describe "for third-party library linking" do
           it "installs packaged libraries' headers" do
             packaged_library_header_files.each do |header|
               assert(

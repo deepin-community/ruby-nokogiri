@@ -44,6 +44,18 @@ module Nokogiri
         VALUES = [XML, HTML4, HTML5]
       end
 
+      # The visitor configuration set via the +builtins:+ keyword argument to XPathVisitor.new.
+      attr_reader :builtins
+
+      # The visitor configuration set via the +doctype:+ keyword argument to XPathVisitor.new.
+      attr_reader :doctype
+
+      # The visitor configuration set via the +prefix:+ keyword argument to XPathVisitor.new.
+      attr_reader :prefix
+
+      # The visitor configuration set via the +namespaces:+ keyword argument to XPathVisitor.new.
+      attr_reader :namespaces
+
       # :call-seq:
       #   new() → XPathVisitor
       #   new(builtins:, doctype:) → XPathVisitor
@@ -54,7 +66,12 @@ module Nokogiri
       #
       # [Returns] XPathVisitor
       #
-      def initialize(builtins: BuiltinsConfig::NEVER, doctype: DoctypeConfig::XML)
+      def initialize(
+        builtins: BuiltinsConfig::NEVER,
+        doctype: DoctypeConfig::XML,
+        prefix: Nokogiri::XML::XPath::GLOBAL_SEARCH_PREFIX,
+        namespaces: nil
+      )
         unless BuiltinsConfig::VALUES.include?(builtins)
           raise(ArgumentError, "Invalid values #{builtins.inspect} for builtins: keyword parameter")
         end
@@ -64,6 +81,8 @@ module Nokogiri
 
         @builtins = builtins
         @doctype = doctype
+        @prefix = prefix
+        @namespaces = namespaces
       end
 
       # :call-seq: config() → Hash
@@ -72,7 +91,7 @@ module Nokogiri
       #   a Hash representing the configuration of the XPathVisitor, suitable for use as
       #   part of the CSS cache key.
       def config
-        { builtins: @builtins, doctype: @doctype }
+        { builtins: @builtins, doctype: @doctype, prefix: @prefix, namespaces: @namespaces }
       end
 
       # :stopdoc:
@@ -128,6 +147,8 @@ module Nokogiri
           is_direct = node.value[1].value[0].nil? # e.g. "has(> a)", "has(~ a)", "has(+ a)"
           ".#{"//" unless is_direct}#{node.value[1].accept(self)}"
         else
+          validate_xpath_function_name(node.value.first)
+
           # xpath function call, let's marshal those arguments
           args = ["."]
           args += node.value[1..-1].map do |n|
@@ -207,6 +228,7 @@ module Nokogiri
           when "parent" then "node()"
           when "root" then "not(parent::*)"
           else
+            validate_xpath_function_name(node.value.first)
             "nokogiri:#{node.value.first}(.)"
           end
         end
@@ -255,6 +277,15 @@ module Nokogiri
           else
             "*[local-name()='#{node.value.first}']"
           end
+        elsif node.value.length == 2 # has a namespace prefix
+          if node.value.first.nil? # namespace prefix is empty
+            node.value.last
+          else
+            node.value.join(":")
+          end
+        elsif node.value.first != "*" && @namespaces&.key?("xmlns")
+          # apply the default namespace (if one is present) to a non-wildcard selector
+          "xmlns:#{node.value.first}"
         else
           node.value.first
         end
@@ -270,11 +301,17 @@ module Nokogiri
 
       private
 
+      def validate_xpath_function_name(name)
+        if name.start_with?("-")
+          raise Nokogiri::CSS::SyntaxError, "Invalid XPath function name '#{name}'"
+        end
+      end
+
       def html5_element_name_needs_namespace_handling(node)
-        # if this is the wildcard selector "*", use it as normal
-        node.value.first != "*" &&
-          # if there is already a namespace (i.e., it is a prefixed QName), use it as normal
-          !node.value.first.include?(":")
+        # if there is already a namespace (i.e., it is a prefixed QName), use it as normal
+        node.value.length == 1 &&
+          # if this is the wildcard selector "*", use it as normal
+          node.value.first != "*"
       end
 
       def nth(node, options = {})
@@ -302,7 +339,7 @@ module Nokogiri
       end
 
       def read_a_and_positive_b(values)
-        op = values[2]
+        op = values[2].strip
         if op == "+"
           a = values[0].to_i
           b = values[3].to_i
@@ -333,26 +370,6 @@ module Nokogiri
           # use only ordinary xpath functions
           "contains(concat(' ',normalize-space(#{hay}),' '),' #{needle} ')"
         end
-      end
-    end
-
-    module XPathVisitorAlwaysUseBuiltins # :nodoc:
-      def self.new
-        warn(
-          "Nokogiri::CSS::XPathVisitorAlwaysUseBuiltins is deprecated and will be removed in a future version of Nokogiri",
-          { uplevel: 1 },
-        )
-        XPathVisitor.new(builtins: :always)
-      end
-    end
-
-    module XPathVisitorOptimallyUseBuiltins # :nodoc:
-      def self.new
-        warn(
-          "Nokogiri::CSS::XPathVisitorOptimallyUseBuiltins is deprecated and will be removed in a future version of Nokogiri",
-          { uplevel: 1 },
-        )
-        XPathVisitor.new(builtins: :optimal)
       end
     end
   end

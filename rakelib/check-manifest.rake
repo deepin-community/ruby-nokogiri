@@ -43,6 +43,7 @@ task :check_manifest, [:verbose] do |_, args|
     .gitignore
     .gitmodules
     .rubocop.yml
+    .rubocop_exclude.yml
     .rubocop_todo.yml
     CHANGELOG.md
     CODE_OF_CONDUCT.md
@@ -55,6 +56,9 @@ task :check_manifest, [:verbose] do |_, args|
     [a-z]*.{log,out}
     [0-9]*
     appveyor.yml
+    **/compile_commands.json
+    gumbo-parser/fuzzer/*
+    gumbo-parser/googletest/*
     gumbo-parser/test/*
     gumbo-parser/gperf-filter.sed
     lib/nokogiri/**/nokogiri.{jar,so}

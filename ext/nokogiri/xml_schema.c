@@ -10,21 +10,15 @@ xml_schema_deallocate(void *data)
 }
 
 static const rb_data_type_t xml_schema_type = {
-  .wrap_struct_name = "Nokogiri::XML::Schema",
+  .wrap_struct_name = "xmlSchema",
   .function = {
     .dfree = xml_schema_deallocate,
   },
   .flags = RUBY_TYPED_FREE_IMMEDIATELY | RUBY_TYPED_WB_PROTECTED,
 };
 
-/*
- * call-seq:
- *  validate_document(document)
- *
- * Validate a Nokogiri::XML::Document against this Schema.
- */
 static VALUE
-validate_document(VALUE self, VALUE document)
+noko_xml_schema__validate_document(VALUE self, VALUE document)
 {
   xmlDocPtr doc;
   xmlSchemaPtr schema;
@@ -43,29 +37,27 @@ validate_document(VALUE self, VALUE document)
     rb_raise(rb_eRuntimeError, "Could not create a validation context");
   }
 
-#ifdef HAVE_XMLSCHEMASETVALIDSTRUCTUREDERRORS
   xmlSchemaSetValidStructuredErrors(
     valid_ctxt,
-    Nokogiri_error_array_pusher,
+    noko__error_array_pusher,
     (void *)errors
   );
-#endif
 
-  xmlSchemaValidateDoc(valid_ctxt, doc);
+  int status = xmlSchemaValidateDoc(valid_ctxt, doc);
 
   xmlSchemaFreeValidCtxt(valid_ctxt);
+
+  if (status != 0) {
+    if (RARRAY_LEN(errors) == 0) {
+      rb_ary_push(errors, rb_str_new2("Could not validate document"));
+    }
+  }
 
   return errors;
 }
 
-/*
- * call-seq:
- *  validate_file(filename)
- *
- * Validate a file against this Schema.
- */
 static VALUE
-validate_file(VALUE self, VALUE rb_filename)
+noko_xml_schema__validate_file(VALUE self, VALUE rb_filename)
 {
   xmlSchemaPtr schema;
   xmlSchemaValidCtxtPtr valid_ctxt;
@@ -84,33 +76,34 @@ validate_file(VALUE self, VALUE rb_filename)
     rb_raise(rb_eRuntimeError, "Could not create a validation context");
   }
 
-#ifdef HAVE_XMLSCHEMASETVALIDSTRUCTUREDERRORS
   xmlSchemaSetValidStructuredErrors(
     valid_ctxt,
-    Nokogiri_error_array_pusher,
+    noko__error_array_pusher,
     (void *)errors
   );
-#endif
 
-  xmlSchemaValidateFile(valid_ctxt, filename, 0);
+  int status = xmlSchemaValidateFile(valid_ctxt, filename, 0);
 
   xmlSchemaFreeValidCtxt(valid_ctxt);
+
+  if (status != 0) {
+    if (RARRAY_LEN(errors) == 0) {
+      rb_ary_push(errors, rb_str_new2("Could not validate file."));
+    }
+  }
 
   return errors;
 }
 
 static VALUE
 xml_schema_parse_schema(
-  VALUE klass,
+  VALUE rb_class,
   xmlSchemaParserCtxtPtr c_parser_context,
   VALUE rb_parse_options
 )
 {
-  VALUE rb_errors;
-  int parse_options_int;
-  xmlSchemaPtr c_schema;
-  xmlExternalEntityLoader old_loader = 0;
-  VALUE rb_schema;
+  xmlExternalEntityLoader saved_loader = 0;
+  libxmlStructuredErrorHandlerState handler_state;
 
   if (NIL_P(rb_parse_options)) {
     rb_parse_options = rb_const_get_at(
@@ -118,45 +111,41 @@ xml_schema_parse_schema(
                          rb_intern("DEFAULT_SCHEMA")
                        );
   }
+  int c_parse_options = (int)NUM2INT(rb_funcall(rb_parse_options, rb_intern("to_i"), 0));
 
-  rb_errors = rb_ary_new();
-  xmlSetStructuredErrorFunc((void *)rb_errors, Nokogiri_error_array_pusher);
+  VALUE rb_errors = rb_ary_new();
+  noko__structured_error_func_save_and_set(&handler_state, (void *)rb_errors, noko__error_array_pusher);
 
-#ifdef HAVE_XMLSCHEMASETPARSERSTRUCTUREDERRORS
   xmlSchemaSetParserStructuredErrors(
     c_parser_context,
-    Nokogiri_error_array_pusher,
+    noko__error_array_pusher,
     (void *)rb_errors
   );
-#endif
 
-  parse_options_int = (int)NUM2INT(rb_funcall(rb_parse_options, rb_intern("to_i"), 0));
-  if (parse_options_int & XML_PARSE_NONET) {
-    old_loader = xmlGetExternalEntityLoader();
+  if (c_parse_options & XML_PARSE_NONET) {
+    saved_loader = xmlGetExternalEntityLoader();
     xmlSetExternalEntityLoader(xmlNoNetExternalEntityLoader);
   }
 
-  c_schema = xmlSchemaParse(c_parser_context);
+  xmlSchemaPtr c_schema = xmlSchemaParse(c_parser_context);
 
-  if (old_loader) {
-    xmlSetExternalEntityLoader(old_loader);
+  if (saved_loader) {
+    xmlSetExternalEntityLoader(saved_loader);
   }
 
-  xmlSetStructuredErrorFunc(NULL, NULL);
   xmlSchemaFreeParserCtxt(c_parser_context);
+  noko__structured_error_func_restore(&handler_state);
 
   if (NULL == c_schema) {
-    xmlErrorPtr error = xmlGetLastError();
-    if (error) {
-      Nokogiri_error_raise(NULL, error);
+    VALUE exception = rb_funcall(cNokogiriXmlSyntaxError, rb_intern("aggregate"), 1, rb_errors);
+    if (RB_TEST(exception)) {
+      rb_exc_raise(exception);
     } else {
       rb_raise(rb_eRuntimeError, "Could not parse document");
     }
-
-    return Qnil;
   }
 
-  rb_schema = TypedData_Wrap_Struct(klass, &xml_schema_type, c_schema);
+  VALUE rb_schema = TypedData_Wrap_Struct(rb_class, &xml_schema_type, c_schema);
   rb_iv_set(rb_schema, "@errors", rb_errors);
   rb_iv_set(rb_schema, "@parse_options", rb_parse_options);
 
@@ -164,47 +153,24 @@ xml_schema_parse_schema(
 }
 
 /*
- * call-seq:
- *   read_memory(string) → Nokogiri::XML::Schema
+ * :call-seq:
+ *   from_document(input) → Nokogiri::XML::Schema
+ *   from_document(input, parse_options) → Nokogiri::XML::Schema
  *
- * Create a new schema parsed from the contents of +string+
+ * Parse an \XSD schema definition from a Document to create a new Nokogiri::XML::Schema
  *
  * [Parameters]
- * - +string+: String containing XML to be parsed as a schema
+ * - +input+ (XML::Document) A document containing the \XSD schema definition
+ * - +parse_options+ (Nokogiri::XML::ParseOptions)
+ *   Defaults to Nokogiri::XML::ParseOptions::DEFAULT_SCHEMA
  *
  * [Returns] Nokogiri::XML::Schema
  */
 static VALUE
-read_memory(int argc, VALUE *argv, VALUE klass)
+noko_xml_schema_s_from_document(int argc, VALUE *argv, VALUE rb_class)
 {
-  VALUE rb_content;
-  VALUE rb_parse_options;
-  xmlSchemaParserCtxtPtr c_parser_context;
-
-  rb_scan_args(argc, argv, "11", &rb_content, &rb_parse_options);
-
-  c_parser_context = xmlSchemaNewMemParserCtxt(
-                       (const char *)StringValuePtr(rb_content),
-                       (int)RSTRING_LEN(rb_content)
-                     );
-
-  return xml_schema_parse_schema(klass, c_parser_context, rb_parse_options);
-}
-
-/*
- * call-seq:
- *   from_document(document) → Nokogiri::XML::Schema
- *
- * Create a new schema parsed from the +document+.
- *
- * [Parameters]
- * - +document+: Nokogiri::XML::Document to be parsed
- *
- * [Returns] Nokogiri::XML::Schema
- */
-static VALUE
-rb_xml_schema_s_from_document(int argc, VALUE *argv, VALUE klass)
-{
+  /* TODO: deprecate this method and put file-or-string logic into .new so that becomes the
+   * preferred entry point, and this can become a private method */
   VALUE rb_document;
   VALUE rb_parse_options;
   VALUE rb_schema;
@@ -222,8 +188,7 @@ rb_xml_schema_s_from_document(int argc, VALUE *argv, VALUE klass)
 
   if (!rb_obj_is_kind_of(rb_document, cNokogiriXmlDocument)) {
     xmlNodePtr deprecated_node_type_arg;
-    // TODO: deprecate allowing Node
-    NOKO_WARN_DEPRECATION("Passing a Node as the first parameter to Schema.from_document is deprecated. Please pass a Document instead. This will become an error in a future release of Nokogiri.");
+    NOKO_WARN_DEPRECATION("Passing a Node as the first parameter to Schema.from_document is deprecated. Please pass a Document instead. This will become an error in Nokogiri v1.17.0."); // TODO: deprecated in v1.15.3, remove in v1.17.0
     Noko_Node_Get_Struct(rb_document, xmlNode, deprecated_node_type_arg);
     c_document = deprecated_node_type_arg->doc;
   } else {
@@ -237,7 +202,7 @@ rb_xml_schema_s_from_document(int argc, VALUE *argv, VALUE klass)
   }
 
   c_parser_context = xmlSchemaNewDocParserCtxt(c_document);
-  rb_schema = xml_schema_parse_schema(klass, c_parser_context, rb_parse_options);
+  rb_schema = xml_schema_parse_schema(rb_class, c_parser_context, rb_parse_options);
 
   if (defensive_copy_p) {
     xmlFreeDoc(c_document);
@@ -254,9 +219,8 @@ noko_init_xml_schema(void)
 
   rb_undef_alloc_func(cNokogiriXmlSchema);
 
-  rb_define_singleton_method(cNokogiriXmlSchema, "read_memory", read_memory, -1);
-  rb_define_singleton_method(cNokogiriXmlSchema, "from_document", rb_xml_schema_s_from_document, -1);
+  rb_define_singleton_method(cNokogiriXmlSchema, "from_document", noko_xml_schema_s_from_document, -1);
 
-  rb_define_private_method(cNokogiriXmlSchema, "validate_document", validate_document, 1);
-  rb_define_private_method(cNokogiriXmlSchema, "validate_file",     validate_file, 1);
+  rb_define_private_method(cNokogiriXmlSchema, "validate_document", noko_xml_schema__validate_document, 1);
+  rb_define_private_method(cNokogiriXmlSchema, "validate_file",     noko_xml_schema__validate_file, 1);
 }

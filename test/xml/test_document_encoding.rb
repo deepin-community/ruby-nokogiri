@@ -29,6 +29,11 @@ module Nokogiri
             encoding = "Shift_JIS"
             assert_equal(encoding, Nokogiri::XML(nil, nil, encoding).encoding)
           end
+
+          it "applies the specified kwargs encoding even if on empty documents" do
+            encoding = "Shift_JIS"
+            assert_equal(encoding, Nokogiri::XML(nil, encoding: encoding).encoding)
+          end
         end
 
         describe "#encoding=" do
@@ -91,7 +96,11 @@ module Nokogiri
         describe "pseudo-IO" do
           it "serializes correctly with Zip::OutputStream objects" do
             # https://github.com/sparklemotion/nokogiri/issues/2773
-            require "zip"
+            begin
+              require "zip"
+            rescue LoadError
+              skip("rubyzip is not installed")
+            end
 
             xml = <<~XML
               <?xml version="1.0" encoding="UTF-8"?>

@@ -1,6 +1,6 @@
 #include <nokogiri.h>
 
-VALUE cNokogiriXsltStylesheet ;
+VALUE cNokogiriXsltStylesheet;
 
 static void
 mark(void *data)
@@ -18,8 +18,8 @@ dealloc(void *data)
   ruby_xfree(wrapper);
 }
 
-static const rb_data_type_t xslt_stylesheet_type = {
-  .wrap_struct_name = "Nokogiri::XSLT::Stylesheet",
+static const rb_data_type_t nokogiri_xslt_stylesheet_tuple_type = {
+  .wrap_struct_name = "nokogiriXsltStylesheetTuple",
   .function = {
     .dmark = mark,
     .dfree = dealloc,
@@ -56,7 +56,7 @@ Nokogiri_wrap_xslt_stylesheet(xsltStylesheetPtr ss)
   self = TypedData_Make_Struct(
            cNokogiriXsltStylesheet,
            nokogiriXsltStylesheetTuple,
-           &xslt_stylesheet_type,
+           &nokogiri_xslt_stylesheet_tuple_type,
            wrapper
          );
 
@@ -71,7 +71,12 @@ Nokogiri_wrap_xslt_stylesheet(xsltStylesheetPtr ss)
  * call-seq:
  *   parse_stylesheet_doc(document)
  *
- * Parse a stylesheet from +document+.
+ * Parse an XSLT::Stylesheet from +document+.
+ *
+ * [Parameters]
+ * - +document+ (Nokogiri::XML::Document) the document to be parsed.
+ *
+ * [Returns] Nokogiri::XSLT::Stylesheet
  */
 static VALUE
 parse_stylesheet_doc(VALUE klass, VALUE xmldocobj)
@@ -104,7 +109,7 @@ parse_stylesheet_doc(VALUE klass, VALUE xmldocobj)
  * call-seq:
  *   serialize(document)
  *
- * Serialize +document+ to an xml string.
+ * Serialize +document+ to an xml string, as specified by the +method+ parameter in the Stylesheet.
  */
 static VALUE
 rb_xslt_stylesheet_serialize(VALUE self, VALUE xmlobj)
@@ -119,7 +124,7 @@ rb_xslt_stylesheet_serialize(VALUE self, VALUE xmlobj)
   TypedData_Get_Struct(
     self,
     nokogiriXsltStylesheetTuple,
-    &xslt_stylesheet_type,
+    &nokogiri_xslt_stylesheet_tuple_type,
     wrapper
   );
   xsltSaveResultToString(&doc_ptr, &doc_len, xml, wrapper->ss);
@@ -133,7 +138,7 @@ rb_xslt_stylesheet_serialize(VALUE self, VALUE xmlobj)
  *   transform(document)
  *   transform(document, params = {})
  *
- * Apply an XSLT stylesheet to an XML::Document.
+ * Transform an XML::Document as defined by an XSLT::Stylesheet.
  *
  * [Parameters]
  * - +document+ (Nokogiri::XML::Document) the document to be transformed.
@@ -268,7 +273,7 @@ rb_xslt_stylesheet_transform(int argc, VALUE *argv, VALUE self)
   Check_Type(rb_param, T_ARRAY);
 
   c_document = noko_xml_document_unwrap(rb_document);
-  TypedData_Get_Struct(self, nokogiriXsltStylesheetTuple, &xslt_stylesheet_type, wrapper);
+  TypedData_Get_Struct(self, nokogiriXsltStylesheetTuple, &nokogiri_xslt_stylesheet_tuple_type, wrapper);
 
   param_len = RARRAY_LEN(rb_param);
   params = ruby_xcalloc((size_t)param_len + 1, sizeof(char *));
@@ -357,7 +362,7 @@ initFunc(xsltTransformContextPtr ctxt, const xmlChar *uri)
   TypedData_Get_Struct(
     (VALUE)ctxt->style->_private,
     nokogiriXsltStylesheetTuple,
-    &xslt_stylesheet_type,
+    &nokogiri_xslt_stylesheet_tuple_type,
     wrapper
   );
   inst = rb_class_new_instance(0, NULL, obj);
@@ -375,7 +380,7 @@ shutdownFunc(xsltTransformContextPtr ctxt,
   TypedData_Get_Struct(
     (VALUE)ctxt->style->_private,
     nokogiriXsltStylesheetTuple,
-    &xslt_stylesheet_type,
+    &nokogiri_xslt_stylesheet_tuple_type,
     wrapper
   );
 

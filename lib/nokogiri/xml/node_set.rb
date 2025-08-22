@@ -4,17 +4,19 @@
 module Nokogiri
   module XML
     ####
-    # A NodeSet contains a list of Nokogiri::XML::Node objects.  Typically
-    # a NodeSet is return as a result of searching a Document via
-    # Nokogiri::XML::Searchable#css or Nokogiri::XML::Searchable#xpath
+    # A NodeSet is an Enumerable that contains a list of Nokogiri::XML::Node objects.
+    #
+    # Typically a NodeSet is returned as a result of searching a Document via
+    # Nokogiri::XML::Searchable#css or Nokogiri::XML::Searchable#xpath.
+    #
+    # Note that the `#dup` and `#clone` methods perform shallow copies; these methods do not copy
+    # the Nodes contained in the NodeSet (similar to how Array and other Enumerable classes work).
     class NodeSet
       include Nokogiri::XML::Searchable
       include Enumerable
 
       # The Document this NodeSet is associated with
       attr_accessor :document
-
-      alias_method :clone, :dup
 
       # Create a NodeSet with +document+ defaulting to +list+
       def initialize(document, list = [])
@@ -121,7 +123,7 @@ module Nokogiri
           return self[args.first]
         end
 
-        super(*args)
+        super
       end
       alias_method :%, :at
 
@@ -372,7 +374,7 @@ module Nokogiri
       # Removes the last element from set and returns it, or +nil+ if
       # the set is empty
       def pop
-        return nil if length == 0
+        return if length == 0
 
         delete(last)
       end
@@ -381,7 +383,7 @@ module Nokogiri
       # Returns the first element of the NodeSet and removes it.  Returns
       # +nil+ if the set is empty.
       def shift
-        return nil if length == 0
+        return if length == 0
 
         delete(first)
       end
@@ -423,7 +425,7 @@ module Nokogiri
       end
 
       ###
-      # Return a nicely formated string representation
+      # Return a nicely formatted string representation
       def inspect
         "[#{map(&:inspect).join(", ")}]"
       end
@@ -435,7 +437,7 @@ module Nokogiri
       #
       #  Returns the members of this NodeSet as an array, to use in pattern matching.
       #
-      #  ⚡ This is an experimental feature, available since v1.14.0
+      #  Since v1.14.0
       #
       def deconstruct
         to_a

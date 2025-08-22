@@ -11,33 +11,51 @@ compaction. When running the tests, every 20th test crashes like this:
 >     <internal:gc>:213:in `compact'
 >     /home/terceiro/ruby-nokogiri-1.13.5+dfsg/test/helper.rb:123:in `teardown'
 ---
- test/helper.rb | 10 ++++++++--
- 1 file changed, 8 insertions(+), 2 deletions(-)
+ test/helper.rb | 23 ++++++++++++++++-------
+ 1 file changed, 16 insertions(+), 7 deletions(-)
 
-diff --git a/test/helper.rb b/test/helper.rb
-index 8d4569e..4351aea 100644
 --- a/test/helper.rb
 +++ b/test/helper.rb
-@@ -191,14 +191,20 @@ module Nokogiri
+@@ -183,14 +183,20 @@
            GC.start(full_mark: true)
-         when "compact"
+         when :compact
            if @@test_count % COMPACT_EVERY == 0
 -            GC.compact
 +            begin
 +              GC.compact
 +            rescue NotImplementedError
 +            end
+             putc("<")
            else
              GC.start(full_mark: true)
            end
-         when "verify"
+         when :verify
            if @@test_count % COMPACT_EVERY == 0
-             # https://alanwu.space/post/check-compaction/
 -            gc_verify_compaction_references
 +            begin
 +              gc_verify_compaction_references
 +            rescue NotImplementedError
 +            end
+             putc("!")
            end
            GC.start(full_mark: true)
-         when "stress"
+@@ -211,11 +217,14 @@
+     end
+ 
+     def gc_verify_compaction_references
+-      # https://alanwu.space/post/check-compaction/
+-      if Gem::Requirement.new(">= 3.2.0").satisfied_by?(Gem::Version.new(RUBY_VERSION))
+-        GC.verify_compaction_references(expand_heap: true, toward: :empty)
+-      else
+-        GC.verify_compaction_references(double_heap: true, toward: :empty)
++      begin
++        # https://alanwu.space/post/check-compaction/
++        if Gem::Requirement.new(">= 3.2.0").satisfied_by?(Gem::Version.new(RUBY_VERSION))
++          GC.verify_compaction_references(expand_heap: true, toward: :empty)
++        else
++          GC.verify_compaction_references(double_heap: true, toward: :empty)
++        end
++      rescue NotImplementedError
+       end
+     end
+ 

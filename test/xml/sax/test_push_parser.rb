@@ -32,9 +32,36 @@ describe Nokogiri::XML::SAX::PushParser do
 
   it :test_empty_doc do
     parser.options |= Nokogiri::XML::ParseOptions::RECOVER
-    parser.write("", true)
-    assert_nil parser.document.start_elements
-    assert_nil parser.document.end_elements
+    parser.finish
+
+    assert_nil(parser.document.start_elements)
+    assert_nil(parser.document.end_elements)
+    if Nokogiri.jruby?
+      assert_empty(parser.document.errors)
+    elsif Nokogiri.uses_libxml?(">= 2.12.0") # gnome/libxml2@53050b1d
+      assert_match(/Document is empty/, parser.document.errors.first)
+    end
+    assert(parser.document.end_document_called)
+  end
+
+  it :test_empty_doc_without_recovery do
+    # behavior is different between implementations
+    # https://github.com/sparklemotion/nokogiri/issues/1758
+    if Nokogiri.jruby?
+      parser.finish
+
+      assert_nil(parser.document.start_elements)
+      assert_nil(parser.document.end_elements)
+      assert_empty(parser.document.errors)
+      assert(parser.document.end_document_called)
+    else
+      e = assert_raises(Nokogiri::XML::SyntaxError) do
+        parser.finish
+      end
+      if Nokogiri.uses_libxml?(">= 2.12.0") # gnome/libxml2@53050b1d
+        assert_match(/Document is empty/, e.message)
+      end
+    end
   end
 
   it :test_finish_should_rethrow_last_error do
@@ -173,7 +200,7 @@ describe Nokogiri::XML::SAX::PushParser do
       </p>
     XML
     parser.finish
-    assert(parser.document.errors.size >= 1)
+    assert_operator(parser.document.errors.size, :>=, 1)
     assert_equal [["p", []], ["bar", []]], parser.document.start_elements
     assert_equal "FooBar", parser.document.data.map { |x|
       x.gsub(/\s/, "")
@@ -182,12 +209,18 @@ describe Nokogiri::XML::SAX::PushParser do
 
   it :test_broken_encoding do
     skip_unless_libxml2("ultra hard to fix for pure Java version")
+
     parser.options |= Nokogiri::XML::ParseOptions::RECOVER
     # This is ISO_8859-1:
     parser << "<?xml version='1.0' encoding='UTF-8'?><r>Gau\337</r>"
     parser.finish
-    assert(parser.document.errors.size >= 1)
-    assert_equal "Gau\337", parser.document.data.join
+
+    assert_operator(parser.document.errors.size, :>=, 1)
+
+    # the interpretation of the byte may vary by libxml2 version in recovery mode
+    # see for example https://gitlab.gnome.org/GNOME/libxml2/-/issues/598
+    assert(parser.document.data.join.start_with?("Gau"))
+
     assert_equal [["r"]], parser.document.end_elements
   end
 

@@ -154,8 +154,7 @@ public class XmlSchema extends RubyObject
       throw context.runtime.newTypeError(msg);
     }
     if (!(rbDocument instanceof XmlDocument)) {
-      // TODO: deprecate allowing Node
-      context.runtime.getWarnings().warn("Passing a Node as the first parameter to Schema.from_document is deprecated. Please pass a Document instead. This will become an error in a future release of Nokogiri.");
+      context.runtime.getWarnings().warn("Passing a Node as the first parameter to Schema.from_document is deprecated. Please pass a Document instead. This will become an error in Nokogiri v1.17.0."); // TODO: deprecated in v1.15.3, remove in v1.17.0
     }
 
     XmlDocument doc = ((XmlDocument)((XmlNode) rbDocument).document(context));
@@ -174,19 +173,6 @@ public class XmlSchema extends RubyObject
     }
 
     return getSchema(context, (RubyClass)klazz, source, parseOptions);
-  }
-
-  @JRubyMethod(meta = true, required = 1, optional = 1)
-  public static IRubyObject
-  read_memory(ThreadContext context, IRubyObject klazz, IRubyObject[] args)
-  {
-    IRubyObject content = args[0];
-    IRubyObject parseOptions = null;
-    if (args.length > 1) {
-      parseOptions = args[1];
-    }
-    String data = content.convertToString().asJavaString();
-    return getSchema(context, (RubyClass) klazz, new StreamSource(new StringReader(data)), parseOptions);
   }
 
   private static IRubyObject
@@ -216,14 +202,22 @@ public class XmlSchema extends RubyObject
 
     XmlDomParserContext ctx = new XmlDomParserContext(runtime, RubyFixnum.newFixnum(runtime, 1L));
     ctx.setInputSourceFile(context, file);
-    XmlDocument xmlDocument = ctx.parse(context, getNokogiriClass(runtime, "Nokogiri::XML::Document"), context.nil);
-    return validate_document_or_file(context, xmlDocument);
+    try {
+      XmlDocument xmlDocument = ctx.parse(context, getNokogiriClass(runtime, "Nokogiri::XML::Document"), context.nil);
+      return validate_document_or_file(context, xmlDocument);
+    } catch (Exception ex) {
+      RubyArray errors = (RubyArray)context.runtime.newEmptyArray();
+      XmlSyntaxError xmlSyntaxError = XmlSyntaxError.createXMLSyntaxError(context.runtime);
+      xmlSyntaxError.setException(ex);
+      errors.append(xmlSyntaxError);
+      return errors;
+    }
   }
 
   IRubyObject
   validate_document_or_file(ThreadContext context, XmlDocument xmlDocument)
   {
-    RubyArray<?> errors = (RubyArray) this.getInstanceVariable("@errors");
+    RubyArray errors = context.runtime.newEmptyArray();
     ErrorHandler errorHandler = new SchemaErrorHandler(context.runtime, errors);
     setErrorHandler(errorHandler);
 
@@ -249,6 +243,10 @@ public class XmlSchema extends RubyObject
   protected void
   validate(Document document) throws SAXException, IOException
   {
+    if (document.getDocumentElement() == null) {
+      throw new SAXException("Document is empty");
+    }
+
     DOMSource docSource = new DOMSource(document);
     validator.validate(docSource);
   }
